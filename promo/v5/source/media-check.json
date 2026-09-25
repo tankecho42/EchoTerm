@@ -1,0 +1,68 @@
+{
+  "file": "/Users/tank/Documents/ChatGPT/EchoTerm/promo/v5/output/EchoTerm-Promo-v5-30s.mp4",
+  "duration_seconds": 30.0,
+  "width": 1920,
+  "height": 1080,
+  "frame_rate": "60/1",
+  "decoded_frames": 1800,
+  "video_codec": "h264",
+  "pixel_format": "yuv420p",
+  "audio_codec": "aac",
+  "audio_hz": 48000,
+  "audio_channels": 2,
+  "full_decode": "passed",
+  "native_pixel_frames": 1800,
+  "sha256": "18077bedf12051add2988bf02d000f43cf2dd56426dc375cb73d02308a66531a",
+  "production_pixel_source_sha256": "7bb1fd09324017407a834cbea9c24b7e28e6b212d6142f6682f353b0ab0c533d",
+  "method": "Actual UI capture plates; scripted AI demonstration; 60fps Swift pixel animation; composited glass, session map and camera. No claim of live 60fps screen recording.",
+  "revision": "Continuous pixel-led search; shared 3D camera and block plane; staggered cubic arrival/peeling; cross-scene theme strands and wordmark.",
+  "visual_review": "Reviewed the encoded overview and search, lifted block, target underline, outgoing particle curves, appearance handoff and end card; replaced uniform rectangle scaling with staggered curved travel.",
+  "motion_check": {
+    "particle_count": 168,
+    "sampled_frames": 897,
+    "flow_seconds": [
+      10.1,
+      25.05
+    ],
+    "largest_particle_steps_px": [
+      [
+        60.76874172546402,
+        16.866666666666667
+      ],
+      [
+        60.43572625586429,
+        16.883333333333333
+      ],
+      [
+        60.003599894830415,
+        16.85
+      ],
+      [
+        58.96638217461046,
+        16.9
+      ],
+      [
+        58.244299731351965,
+        16.833333333333332
+      ],
+      [
+        57.399746922675874,
+        16.816666666666666
+      ],
+      [
+        56.37734200403167,
+        16.916666666666668
+      ],
+      [
+        55.61600152529277,
+        16.8
+      ]
+    ],
+    "p99_max_step_px": 54.148554413136296,
+    "pixel_bounds": "all positions finite; all sizes positive",
+    "transitions": "staggered cubic trajectories into and out of the block outline"
+  },
+  "render_source_sha256": "1367c75a171ea76d8f83f01aa7d59ac3943e127e3519e1cc82841358f6e54c4c",
+  "soundtrack_integrated_lufs": -17.8,
+  "soundtrack_true_peak_dbfs": -4.2
+}

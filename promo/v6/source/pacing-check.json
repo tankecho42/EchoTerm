@@ -1,0 +1,74 @@
+{
+  "duration_seconds": 41.0,
+  "frames": 2460,
+  "strictly_forward": true,
+  "timing_inverse_error_seconds": 1.6306589856185383e-08,
+  "max_pixel_step_px": 60.76874160583281,
+  "pixel_step_percentile_99_px": 54.41610706725691,
+  "holds": [
+    {
+      "name": "block_title",
+      "source_start": 9.62,
+      "source_end": 10.08,
+      "start": 9.62,
+      "end": 11.73,
+      "duration": 2.11
+    },
+    {
+      "name": "question_echo",
+      "source_start": 12.1,
+      "source_end": 12.4,
+      "start": 13.75,
+      "end": 15.2,
+      "duration": 1.45
+    },
+    {
+      "name": "selected_block",
+      "source_start": 17.68,
+      "source_end": 17.83,
+      "start": 20.48,
+      "end": 21.88,
+      "duration": 1.4
+    },
+    {
+      "name": "port_highlight",
+      "source_start": 18.57,
+      "source_end": 18.64,
+      "start": 22.62,
+      "end": 24.34,
+      "duration": 1.72
+    },
+    {
+      "name": "returned_answer",
+      "source_start": 20.605,
+      "source_end": 20.648,
+      "start": 26.305,
+      "end": 28.048,
+      "duration": 1.743
+    },
+    {
+      "name": "glass_arrival",
+      "source_start": 22.43,
+      "source_end": 22.5,
+      "start": 29.83,
+      "end": 30.8,
+      "duration": 0.97
+    },
+    {
+      "name": "three_themes",
+      "source_start": 24.995,
+      "source_end": 25.045,
+      "start": 33.295,
+      "end": 35.095,
+      "duration": 1.8
+    },
+    {
+      "name": "wordmark",
+      "source_start": 28.8,
+      "source_end": 29.5,
+      "start": 38.85,
+      "end": 40.5,
+      "duration": 1.65
+    }
+  ]
+}

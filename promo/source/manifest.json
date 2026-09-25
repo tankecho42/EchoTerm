@@ -1,0 +1,16 @@
+{
+  "product": "EchoTerm",
+  "version": "0.10.10",
+  "duration_seconds": 30,
+  "width": 1920,
+  "height": 1080,
+  "render_fps": 60,
+  "theme": "雾蓝",
+  "background_opacity": 0.25,
+  "glass_material": "通透",
+  "footage": "actual application window frames",
+  "AI_responses": "scripted local demonstration",
+  "tool_calls": "actual read_block and jump_to_block",
+  "background": "separately captured staging workspace, composited in post",
+  "music": "original programmatically synthesized score"
+}

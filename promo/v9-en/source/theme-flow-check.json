@@ -1,0 +1,40 @@
+{
+  "duration": 46.0,
+  "frames": 2760,
+  "flow_span": [
+    [
+      "three_themes_flow",
+      21.7,
+      25.05,
+      2.65
+    ]
+  ],
+  "removed_holds": [
+    "glass_arrival",
+    "three_themes"
+  ],
+  "ribbon_particles": 168,
+  "theme_source_interval": [
+    22.3,
+    25.05
+  ],
+  "frames_checked": 318,
+  "minimum_median_pixel_motion_px_per_frame": 3.660070359890141,
+  "maximum_median_pixel_motion_px_per_frame": 5.745567030706747,
+  "joins": [
+    {
+      "source_second": 20.65,
+      "max_position_delta_px_at_20us": 0.001163461292185504
+    },
+    {
+      "source_second": 22.3,
+      "max_position_delta_px_at_20us": 0.02813590347641767
+    },
+    {
+      "source_second": 25.05,
+      "max_position_delta_px_at_20us": 0.0048069119493185765
+    }
+  ],
+  "intermediate_theme_avatar": false,
+  "theme_clock": "presentation seconds, continuous closed curve"
+}

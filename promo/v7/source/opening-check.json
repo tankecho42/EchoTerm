@@ -1,0 +1,11 @@
+{
+  "opening_seconds": 5,
+  "duration_seconds": 46,
+  "frames": 2760,
+  "join_max_channel_delta": 0.0,
+  "glyph_pixels": 32,
+  "flight_pixels": 96,
+  "largest_pixel_step_px": 63.49773991224543,
+  "opening_frames_checked": 301,
+  "unchanged_v6_pacing": true
+}

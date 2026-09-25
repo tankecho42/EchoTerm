@@ -1,0 +1,36 @@
+1
+00:00:05,000 --> 00:00:12,950
+EchoTerm · AI-native terminal
+Commands. Questions. One prompt.
+Just type. Echo knows what to do.
+
+2
+00:00:13,900 --> 00:00:16,750
+Every command. Its own block.
+Commands, answers and context. Clearly organized.
+
+3
+00:00:18,200 --> 00:00:23,600
+Every session. Within reach.
+Echo finds the context, wherever you left it.
+
+4
+00:00:23,950 --> 00:00:30,250
+Across sessions. Straight to answers.
+S1 · Block 03 · config/server.toml
+
+5
+00:00:30,650 --> 00:00:33,650
+Your context stays connected.
+From this question to the right block in another session.
+
+6
+00:00:34,740 --> 00:00:40,350
+Less interface. More focus.
+Adjust opacity and glass. Choose your colors.
+
+7
+00:00:42,300 --> 00:00:46,000
+EchoTerm
+Commands and AI. In one flow.
+AI-native terminal. Made for macOS.

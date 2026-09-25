@@ -1,0 +1,71 @@
+{
+  "file": "/Users/tank/Documents/ChatGPT/EchoTerm/promo/v10-en/output/EchoTerm-Promo-English-v10-46s.mp4",
+  "language": "English",
+  "localized_capture": "assets/blocks-en.png",
+  "duration_seconds": 46.0,
+  "width": 1920,
+  "height": 1080,
+  "frame_rate": "60/1",
+  "decoded_frames": 2760,
+  "video_codec": "h264",
+  "pixel_format": "yuv420p",
+  "audio_codec": "aac",
+  "audio_hz": 48000,
+  "audio_channels": 2,
+  "full_decode": "passed",
+  "native_pixel_source_frames": 1800,
+  "held_poses": [
+    {
+      "name": "block_title",
+      "source_start": 9.62,
+      "source_end": 10.08,
+      "start": 14.62,
+      "end": 16.73,
+      "duration": 2.11
+    },
+    {
+      "name": "question_echo",
+      "source_start": 12.1,
+      "source_end": 12.4,
+      "start": 18.75,
+      "end": 20.2,
+      "duration": 1.45
+    },
+    {
+      "name": "selected_block",
+      "source_start": 17.68,
+      "source_end": 17.83,
+      "start": 25.48,
+      "end": 26.88,
+      "duration": 1.4
+    },
+    {
+      "name": "port_highlight",
+      "source_start": 18.57,
+      "source_end": 18.64,
+      "start": 27.62,
+      "end": 29.34,
+      "duration": 1.72
+    },
+    {
+      "name": "returned_answer",
+      "source_start": 20.605,
+      "source_end": 20.648,
+      "start": 31.305,
+      "end": 33.048,
+      "duration": 1.743
+    },
+    {
+      "name": "wordmark",
+      "source_start": 28.8,
+      "source_end": 29.5,
+      "start": 43.85,
+      "end": 45.5,
+      "duration": 1.65
+    }
+  ],
+  "pacing": "5-second entrance; held reading poses; continuous theme scene and three-window decorative flow without avatar stops",
+  "sha256": "440bd69ae41ea27c930183282d843bbbb281136531da24c024a5c818aaa4d36b",
+  "production_pixel_source_sha256": "7bb1fd09324017407a834cbea9c24b7e28e6b212d6142f6682f353b0ab0c533d",
+  "method": "Actual UI capture plates; scripted AI demonstration; 60fps Swift pixel animation; composited glass, session map and camera. No claim of live 60fps screen recording."
+}

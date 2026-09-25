@@ -1,0 +1,41 @@
+{
+  "file": "/Users/tank/Documents/ChatGPT/EchoTerm/promo/v4/output/EchoTerm-Promo-v4-30s.mp4",
+  "duration_seconds": 30.0,
+  "width": 1920,
+  "height": 1080,
+  "frame_rate": "60/1",
+  "decoded_frames": 1800,
+  "video_codec": "h264",
+  "pixel_format": "yuv420p",
+  "audio_codec": "aac",
+  "audio_hz": 48000,
+  "audio_channels": 2,
+  "full_decode": "passed",
+  "native_pixel_frames": 1800,
+  "sha256": "b8e48b2833d78a5c10ebc1cc468528cda35adcef7f3fe552e9de846af878c429",
+  "production_pixel_source_sha256": "7bb1fd09324017407a834cbea9c24b7e28e6b212d6142f6682f353b0ab0c533d",
+  "method": "Actual UI capture plates; scripted AI demonstration; 60fps Swift pixel animation; composited glass, session map and camera. No claim of live 60fps screen recording.",
+  "revision": "Appearance scene: adjustable opacity and named glass materials; Mist Blue, Iris and Amber windows; no numeric opacity caption.",
+  "visual_review": "Reviewed encoded 22.8 / 24.3 / 24.7 / 25.1 / 25.6 second frames and full contact sheet; three distinct themes, readable controls, pixel-to-wordmark transition, original opening and closing retained.",
+  "unchanged_content_checks": {
+    "unchanged_scene_samples_seconds": [
+      1.15,
+      7.75,
+      18.6,
+      28.65
+    ],
+    "unchanged_frames": "pixel-identical to v3 source frames",
+    "soundtrack": "identical to v3",
+    "numeric_opacity_caption": "removed",
+    "theme_windows": [
+      "雾蓝",
+      "鸢尾",
+      "琥珀"
+    ],
+    "glass_materials": [
+      "通透",
+      "柔和",
+      "磨砂"
+    ]
+  }
+}

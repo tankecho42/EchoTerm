@@ -1,0 +1,41 @@
+[
+  {
+    "file" : "promo\/v9-en\/assets\/blocks-en.png",
+    "recognized" : [
+      "SESSIONS",
+      "\/tmp\/Aurora",
+      "Auto Chat",
+      "Dev Notes",
+      "New session",
+      "S1 - Aurora - bash",
+      "+",
+      "=",
+      "01~",
+      "› cd \/tmp\/Aurora",
+      "v 64 m3",
+      "2hiln",
+      "Next",
+      "02 \/tmp\/Aurora",
+      ") git status --short --branch",
+      "## main",
+      "Explain",
+      "Next",
+      "03 \/tmp\/Aurora",
+      "cat config\/server.toml",
+      "[server]",
+      "host = \"127.0.0.1\"",
+      "port = 4317",
+      "workers = 4",
+      "[features]",
+      "streaming = true",
+      "health_check= \"\/health\"",
+      "Next",
+      "04",
+      "\/tmp\/Aurora",
+      "python3 -m unittest -v",
+      "test_health (test_server.AuroraTests) ••. ok",
+      "+",
+      "v 120 ms"
+    ]
+  }
+]

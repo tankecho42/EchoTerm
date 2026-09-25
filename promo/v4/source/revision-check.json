@@ -1,0 +1,21 @@
+{
+  "unchanged_scene_samples_seconds": [
+    1.15,
+    7.75,
+    18.6,
+    28.65
+  ],
+  "unchanged_frames": "pixel-identical to v3 source frames",
+  "soundtrack": "identical to v3",
+  "numeric_opacity_caption": "removed",
+  "theme_windows": [
+    "雾蓝",
+    "鸢尾",
+    "琥珀"
+  ],
+  "glass_materials": [
+    "通透",
+    "柔和",
+    "磨砂"
+  ]
+}
