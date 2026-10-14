@@ -18,7 +18,9 @@ cp scripts/Info.plist "$staging_app/Contents/Info.plist"
 ditto --norsrc --noextattr "$binary_dir/EchoTerm_EchoTerm.bundle" "$staging_app/Contents/Resources/EchoTerm_EchoTerm.bundle"
 if [[ -f assets/EchoTerm.icns ]]; then cp assets/EchoTerm.icns "$staging_app/Contents/Resources/EchoTerm.icns"; fi
 cp .build/checkouts/SwiftTerm/LICENSE "$staging_app/Contents/Resources/SwiftTerm-LICENSE.txt"
-chmod u+w "$staging_app/Contents/Resources/SwiftTerm-LICENSE.txt"
+cp .build/checkouts/swift-subprocess/LICENSE "$staging_app/Contents/Resources/swift-subprocess-LICENSE.txt"
+cp .build/checkouts/swift-system/LICENSE.txt "$staging_app/Contents/Resources/swift-system-LICENSE.txt"
+chmod u+w "$staging_app/Contents/Resources/"*-LICENSE.txt
 xattr -cr "$staging_app"
 codesign --force --deep --sign - "$staging_app"
 # Replace the bundle instead of overwriting the executable inode of a running app.

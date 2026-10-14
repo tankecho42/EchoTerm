@@ -102,7 +102,7 @@ import Foundation
             try? await Task.sleep(nanoseconds: 350_000_000); return .init(text: fixture)
         }, intentTimeout: 60_000_000)
         a.blocks.append(.init(command: "timeout", directory: "/tmp")); timeout.didExecute("timeout", session: a)
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await wait { timeout.intentPreviews[a.id]?.loading == false }
         check(timeout.activity(for: a) == .attention && timeout.intentPreviews[a.id]?.error?.contains("超时") == true && timeout.intentPreviews[a.id]?.loading == false, "Quick judgment has an independent deadline and releases its loading state")
         try await Task.sleep(nanoseconds: 300_000_000)
         check(timeout.intentPreviews[a.id]?.options.isEmpty == true, "A timed-out quick response cannot reappear later")

@@ -14,6 +14,14 @@
 
 ## 启动
 
+### 下载应用
+
+[GitHub Releases](https://github.com/tankecho42/EchoTerm/releases/latest) 提供可直接下载的应用包。下载 `EchoTerm-0.10.11-macOS-arm64.zip`，解压后将 `EchoTerm.app` 拖入「应用程序」即可，无需安装 Swift 或 Xcode。当前下载包适用于 Apple Silicon Mac，要求 macOS 14 或更新版本。
+
+本版本使用 ad-hoc 签名，尚未经过 Apple 公证。首次打开若被 macOS 阻止，请确认下载来源，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)，在尝试打开后进入「系统设置 → 隐私与安全性 → 仍要打开」。AI 功能需要在设置中配置自己的 Provider、模型与 API Key。
+
+### 从源码构建
+
 需要 macOS 14+、Swift 6.1+（Xcode Command Line Tools 即可），首次构建需要网络下载 Swift Package 依赖。
 
 ```sh

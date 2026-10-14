@@ -69,7 +69,7 @@ import Foundation
         try await Task.sleep(nanoseconds: 270_000_000)
         check(workspace.tabs[0].title == "固定名称", "A late naming response cannot overwrite a manual rename")
         workspace.configureTab(firstTab, customTitle: "", input: .automatic, assistant: .answer)
-        try await Task.sleep(nanoseconds: 160_000_000)
+        try await wait { workspace.tabs[0].namingError != nil }
         check(workspace.tabs[0].namingError?.contains("超时") == true && workspace.tabs[0].title == "检查项目环境", "Title requests have a deadline and preserve the last useful name on failure")
         preferences.shareContext = false
         try await Task.sleep(nanoseconds: 10_000_000)
