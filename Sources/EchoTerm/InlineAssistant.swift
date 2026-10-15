@@ -49,6 +49,10 @@ struct AssistantReplyContent: View {
                     if let id = step.blockID { Button { workspace.revealBlock(sessionID: step.sessionID ?? session.id, blockID: id) } label: { Image(systemName: "arrow.down.right") }.buttonStyle(.plain).help("跳转到这个区块") }
                 }.padding(11).background(theme.text.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: 7))
             }
+            ForEach(assistant.questions(for: reply.id)) { question in
+                UserQuestionView(question: question, session: session, assistant: assistant,
+                                 workspace: workspace, preferences: preferences)
+            }
             if !reply.status.isEmpty { Text(reply.status).font(.system(size: 11)).foregroundStyle(.orange).textSelection(.enabled) }
             ForEach(reply.suggestions) { suggestion in
                 VStack(alignment: .leading, spacing: 8) {
@@ -82,8 +86,9 @@ struct InlineAIBlock: View {
     @State private var hovered = false
     private var theme: TerminalTheme { preferences.theme }
     private var reply: ChatMessage? { assistant.messages(for: session).first { $0.id == block.assistantReplyID } }
+    private var activeReply: Bool { reply.map { assistant.isActiveReply($0, session: session) } ?? false }
     private var activity: CompanionActivity {
-        if reply?.isStreaming == true { return assistant.activity(for: session) }
+        if activeReply { return assistant.activity(for: session) }
         if let reply, reply.activity != .idle { return reply.activity }
         if reply?.status == "已停止" { return .stopped }
         return reply?.status.isEmpty == false ? .attention : .success
@@ -91,16 +96,7 @@ struct InlineAIBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             Rectangle().fill(theme.accent.opacity(0.28)).frame(height: 1)
-            HStack(spacing: 8) {
-                Text(String(format: "%02d", index + 1)).foregroundStyle(theme.accent)
-                Text("ECHO").tracking(1.5)
-                if let mode = block.assistantMode { Text(mode.title) }
-                Text("·"); Text(activity.label)
-                Spacer()
-                if reply?.isStreaming == true { Button("停止 ⌘.") { assistant.cancel(session: session) }.foregroundStyle(theme.accent) }
-                Button { collapsed.toggle() } label: { Image(systemName: collapsed ? "chevron.down" : "chevron.up") }.help(collapsed ? "展开回答" : "折叠回答")
-                Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(block.command + "\n\n" + block.output, forType: .string) } label: { Image(systemName: "doc.on.doc") }.help("复制对话区块")
-            }.font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.muted).buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 5)
+            header
             if block.assistantContinuation != true { HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "sparkle").font(.system(size: 12)).foregroundStyle(theme.accent).frame(width: 13).padding(.top, 3)
                 if TextLayoutPolicy.needsViewport(block.command) {
@@ -116,7 +112,7 @@ struct InlineAIBlock: View {
                         .frame(width: 48, height: 48)
                     VStack(alignment: .leading, spacing: 12) {
                         if let reply {
-                            if reply.isStreaming { Text(assistant.phases[session.id] ?? "思考中…").font(.system(size: 10)).foregroundStyle(theme.muted) }
+                            if activeReply { Text(assistant.phases[session.id] ?? "思考中…").font(.system(size: 10)).foregroundStyle(theme.muted) }
                             AssistantReplyContent(reply: reply, session: session, assistant: assistant, workspace: workspace, preferences: preferences, showSteps: false)
                         }
                     }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +122,55 @@ struct InlineAIBlock: View {
             .background(session.selectedBlockID == block.id ? Color.black.opacity(theme.isLight ? 0.035 : 0.16) : theme.accent.opacity(hovered ? 0.035 : 0.015))
             .contentShape(Rectangle()).onTapGesture { workspace.selectSession(session.id); session.selectedBlockID = block.id }.onHover { hovered = $0 }
             .accessibilityElement(children: .contain).accessibilityLabel("AI 区块 \(index + 1)，\(String(block.command.prefix(180)))")
+    }
+    private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                headerIdentity
+                Text("·")
+                Text(activity.label).fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 8)
+                stopButton
+                headerActions
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    headerIdentity
+                    Spacer(minLength: 4)
+                    headerActions
+                }
+                HStack(spacing: 8) {
+                    Text(activity.label).fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 4)
+                    stopButton
+                }
+            }
+        }.font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.muted)
+            .lineLimit(1).buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 5)
+    }
+    @ViewBuilder private var headerIdentity: some View {
+        Text(String(format: "%02d", index + 1)).foregroundStyle(theme.accent)
+            .fixedSize(horizontal: true, vertical: false)
+        Text("ECHO").tracking(1.5).fixedSize(horizontal: true, vertical: false)
+        if let mode = block.assistantMode { Text(mode.title).fixedSize(horizontal: true, vertical: false) }
+    }
+    @ViewBuilder private var stopButton: some View {
+        if activeReply {
+            Button("停止 ⌘.") { assistant.cancel(session: session) }
+                .foregroundStyle(theme.accent).fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel("停止 Echo 当前任务")
+        }
+    }
+    @ViewBuilder private var headerActions: some View {
+        Button { collapsed.toggle() } label: {
+            Image(systemName: collapsed ? "chevron.down" : "chevron.up")
+        }.help(collapsed ? "展开回答" : "折叠回答")
+            .accessibilityLabel(collapsed ? "展开回答" : "折叠回答")
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(block.command + "\n\n" + block.output, forType: .string)
+        } label: { Image(systemName: "doc.on.doc") }
+            .help("复制对话区块").accessibilityLabel("复制对话区块")
     }
 }
 

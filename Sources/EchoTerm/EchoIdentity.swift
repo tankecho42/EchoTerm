@@ -12,6 +12,7 @@ enum EchoAction: CaseIterable {
         case .working: self = executing ? .executing : .replying
         case .success: self = .success
         case .attention: self = .attention
+        case .awaitingUser: self = .curious
         case .stopped: self = .stopped
         }
     }

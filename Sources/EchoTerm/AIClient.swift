@@ -75,21 +75,24 @@ struct CommandSuggestion: Identifiable, Equatable {
     var explanation: String
     var risk: String
     var state = "pending"
+    var interactive = false
 }
 struct AIToolCall {
     var id: String
     var name: String
     var arguments: String
     func command() throws -> CommandSuggestion {
-        guard let data = arguments.data(using: .utf8),
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let command = object["command"] as? String, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        let object = try InteractionToolArguments.object(arguments, allowed: ["command", "explanation", "risk", "interactive"])
+        guard let command = object["command"] as? String, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               command.utf8.count < 16384,
-              !command.unicodeScalars.contains(where: { ($0.value < 32 && $0.value != 10 && $0.value != 9) || $0.value == 127 }) else {
+              !command.unicodeScalars.contains(where: { ($0.value < 32 && $0.value != 10 && $0.value != 9) || $0.value == 127 }),
+              object["explanation"] == nil || object["explanation"] is String,
+              object["risk"] == nil || object["risk"] is String else {
             throw AIError.message("模型返回的命令参数无效，未执行。")
         }
+        let interactive = try InteractionToolArguments.boolean(object["interactive"], default: false)
         let risk = object["risk"] as? String ?? "write"
-        return .init(command: command, explanation: object["explanation"] as? String ?? "", risk: ["read", "write", "destructive"].contains(risk) ? risk : "write")
+        return .init(command: command, explanation: object["explanation"] as? String ?? "", risk: ["read", "write", "destructive"].contains(risk) ? risk : "write", interactive: interactive)
     }
 }
 struct AIReply {

@@ -2,12 +2,13 @@ import Foundation
 
 /// Explicit presentation states, independent of localized status text.
 enum CompanionActivity: String {
-    case idle, thinking, working, success, attention, stopped
+    case idle, thinking, working, awaitingUser, success, attention, stopped
     var label: String {
         switch self {
         case .idle: return "待命"
         case .thinking: return "思考中"
         case .working: return "工作中"
+        case .awaitingUser: return "等待回答"
         case .success: return "完成"
         case .attention: return "需要留意"
         case .stopped: return "已停止"

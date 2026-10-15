@@ -12,8 +12,6 @@ struct TerminalPane: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var assistant: AssistantStore
     @State private var editorHeight: CGFloat = 24
-    @State private var input = ""
-    @State private var inputHeight: CGFloat = 24
     @State private var completions: [String] = []
     @State private var completionIndex = 0
     @State private var completionTask: Task<Void, Never>?
@@ -172,12 +170,8 @@ struct TerminalPane: View {
                                 interrupt: { if session.agentOwner != nil { assistant.cancel(session: session) } else { session.interrupt() } },
                                 interactive: { session.interactiveView.toggle(); if session.interactiveView { session.focus() } }) {
             if running {
-                HStack(alignment: .top, spacing: 9) {
-                    Text("›").foregroundStyle(theme.muted)
-                    InlineCommandEditor(text: $input, height: $inputHeight, font: preferences.terminalFont, color: NSColor(theme.text), caret: NSColor(theme.accent), focusRequest: session.focusRequest, enabled: active && session.agentOwner == nil && !workspace.pendingQuit && workspace.pendingClose == nil, automaticallyFocus: session.readingAnchorID == nil && !workspace.assistantWantsFocus && !workspace.pendingQuit && workspace.pendingClose == nil,
-                                        onSubmit: { session.sendInput(input); input = "" }, onHistory: { _ in }, onFocus: { workspace.assistantWantsFocus = false; workspace.selectSession(session.id) }, onCancel: { if session.agentOwner != nil { assistant.cancel(session: session) } else { session.interrupt() } })
-                        .frame(height: inputHeight)
-                }.font(.system(size: preferences.fontSize, design: .monospaced))
+                RunningCommandInput(blockID: block.id, session: session, workspace: workspace,
+                                    assistant: assistant, preferences: preferences).id(block.id)
             }
         }
     }
@@ -243,6 +237,78 @@ struct TerminalPane: View {
             if reduceMotion { reader.scrollTo("end", anchor: .bottom) }
             else { withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("end", anchor: .bottom) } }
         }
+    }
+}
+
+/// Manual input is always an explicit affordance, independent of output heuristics.
+private struct RunningCommandInput: View {
+    let blockID: UUID
+    @ObservedObject var session: TerminalSession
+    @ObservedObject var workspace: Workspace
+    @ObservedObject var assistant: AssistantStore
+    @ObservedObject var preferences: Preferences
+    @State private var expanded = false
+    @State private var draft = ""
+    @State private var error: String?
+    private var theme: TerminalTheme { preferences.theme }
+    private var enabled: Bool {
+        session.running && session.runningBlockID == blockID && !session.exited &&
+        !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil
+    }
+    private var validation: String? {
+        if draft.utf8.count > 4_096 { return "命令输入最多 4096 字节（UTF-8）。" }
+        if draft.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) || CharacterSet.controlCharacters.contains($0) }) {
+            return "请只输入一行内容，不含控制字符。"
+        }
+        return nil
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8))
+                    Text("向命令输入").font(.system(size: 10, weight: .medium))
+                    Spacer(minLength: 0)
+                }.padding(.vertical, 4).contentShape(Rectangle())
+            }.buttonStyle(.plain).foregroundStyle(theme.accent)
+                .accessibilityLabel(expanded ? "收起向命令输入" : "展开向命令输入")
+            if expanded {
+                Text(session.agentOwner != nil ? "输入将发送到 Echo 正在执行的这条命令。" : "输入将发送到上方正在运行的命令。")
+                    .font(.system(size: 10)).foregroundStyle(theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("单行输入", text: $draft).textFieldStyle(EchoTextFieldStyle())
+                    .font(Font(preferences.terminalFont)).autocorrectionDisabled(true)
+                    .onSubmit(sendDraft).disabled(!enabled)
+                    .accessibilityLabel("发送给当前运行命令的单行内容")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 7) { actions; Spacer(minLength: 0) }
+                    VStack(alignment: .leading, spacing: 7) { actions }
+                }.buttonStyle(EchoButtonStyle())
+                if let message = validation ?? error {
+                    Text(message).font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }
+        }.padding(.leading, 23).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    @ViewBuilder private var actions: some View {
+        Button("发送", action: sendDraft).disabled(!enabled || draft.isEmpty || validation != nil)
+        Button("仅发送 Return") { send("") }.disabled(!enabled)
+            .help("向这条命令发送一个空行")
+            .accessibilityLabel("向当前命令仅发送 Return 空行")
+        Button("中断 ⌃C") {
+            if session.agentOwner != nil { assistant.cancel(session: session) }
+            else { session.interrupt() }
+        }.disabled(!enabled).foregroundStyle(.orange)
+            .accessibilityLabel("中断当前命令")
+    }
+    private func sendDraft() {
+        guard !draft.isEmpty, validation == nil else { return }
+        send(draft)
+    }
+    private func send(_ text: String) {
+        guard enabled else { return }
+        if assistant.sendCommandInput(text, session: session, expectedBlockID: blockID) { draft = ""; error = nil }
+        else { error = "此命令已结束或输入不可用。" }
     }
 }
 

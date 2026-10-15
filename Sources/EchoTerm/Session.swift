@@ -196,6 +196,13 @@ final class TerminalSession: ObservableObject, Identifiable {
         terminal.requestKeyboardFocus()
     }
     func sendInput(_ text: String) { guard running else { return }; terminal.send(txt: text + "\r") }
+    @discardableResult func sendInput(_ text: String, expectedBlockID: UUID) -> Bool {
+        guard running, !exited, runningBlockID == expectedBlockID,
+              text.utf8.count <= 4096,
+              !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || $0.value == 0x2028 || $0.value == 0x2029 }) else { return false }
+        terminal.send(txt: text + "\r")
+        return true
+    }
     func interrupt() { terminal.send(txt: "\u{03}") }
     func close() {
         onClose?(); ready = false; exited = true

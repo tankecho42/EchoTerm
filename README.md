@@ -1,6 +1,6 @@
 # EchoTerm
 
-命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.10.11**。
+命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.0**。
 
 ![EchoTerm](promo/v10-en/output/EchoTerm-Promo-English-v10-poster.png)
 
@@ -16,7 +16,7 @@
 
 ### 下载应用
 
-[GitHub Releases](https://github.com/tankecho42/EchoTerm/releases/latest) 提供可直接下载的应用包。下载 `EchoTerm-0.10.11-macOS-arm64.zip`，解压后将 `EchoTerm.app` 拖入「应用程序」即可，无需安装 Swift 或 Xcode。当前下载包适用于 Apple Silicon Mac，要求 macOS 14 或更新版本。
+[GitHub Releases](https://github.com/tankecho42/EchoTerm/releases/latest) 提供可直接下载的应用包。下载对应版本的 `EchoTerm-版本-macOS-arm64.zip`，解压后将 `EchoTerm.app` 拖入「应用程序」即可，无需安装 Swift 或 Xcode。当前下载包适用于 Apple Silicon Mac，要求 macOS 14 或更新版本。
 
 本版本使用 ad-hoc 签名，尚未经过 Apple 公证。首次打开若被 macOS 阻止，请确认下载来源，再按 [Apple 官方指引](https://support.apple.com/en-us/102445)，在尝试打开后进入「系统设置 → 隐私与安全性 → 仍要打开」。AI 功能需要在设置中配置自己的 Provider、模型与 API Key。
 
@@ -38,6 +38,15 @@
 swift test                     # XCTest 测试（需要完整 Xcode）
 ./scripts/run.sh --demo         # 展示明确标识的示例 AI 气泡，终端仍是真实 shell
 ```
+
+## 0.11.0 的主要变化
+
+- AI 需要你决定下一步时，可直接显示选项按钮与自定义回答。回答后继续同一轮任务，内联与对话气泡共用同一个问题，重复点击不会重复提交。
+- 自主执行支持交互命令：AI 读取实际运行输出后，可把终端的问题变成选择或输入卡。卡片明确标出目标命令，回答以一行内容发送给原命令；命令结束、任务停止或会话关闭后卡片失效。
+- 等待用户回答的时间不计入目标命令的执行超时。AI 不会仅凭命令安静或输出标点就宣称命令正在等待输入。
+- 普通运行命令也提供折叠的「向命令输入」入口，支持发送一行、仅发送 Return 或中断。密码等敏感内容请在原生终端中输入，不通过 AI 提问卡提交。
+
+从源码打包时，可用 `ECHOTERM_DIST_ROOT` 指定 ZIP 与应用入口的输出目录；`ECHOTERM_BUILD_ROOT` 仍指定运行应用实体，临时签名目录仍遵循 `TMPDIR`。
 
 ## 0.10.11 的主要变化
 

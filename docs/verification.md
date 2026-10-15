@@ -1,3 +1,18 @@
+# 0.11.0 verification
+
+2026-10-15, Apple Silicon, Swift 6.3.2. Local deterministic API/PTY fixtures; no paid model calls.
+
+- Core and localhost network self-tests: **468 / 468 passed**, including all three provider tool protocols, Q&A without terminal context, choices, custom Unicode input, duplicate/stale responses, cancellation and session closure.
+- Real Zsh and Bash: two successive input prompts on one owned command, button/custom answers, human-wait exclusion from execution timeout, final-command budget control and command-exit invalidation.
+- Manual command input resolves the matching pending AI question once and omits its contents from the model result; stale prior cards cannot type into later prompts. An independent timeout monitor hands over an INT-ignoring command even while model transport is stalled.
+- Native UI with a separate QA bundle/defaults domain and localhost provider: inline and bubble answers, real CLI output, manual input followed by a second question, 220px question cards/adaptive header and Stop. Final QA executable code/data sections match the optimized release; only bundle identity and signing metadata differ. Production app and settings were not replaced.
+- Optimized arm64 package: macOS14+, version0.11.0/build22. Strict signing and extraction/resource/license checks. Signature is ad-hoc, without Apple notarization; downloaded Gatekeeper behavior still requires user confirmation.
+- Build/distribution output aliases and app-nested paths are rejected before a build or removal; owned file-preservation fixtures passed. Active build/signing use internal storage/native TMPDIR; formal ZIP is on SSD APFS via explicit ECHOTERM_DIST_ROOT.
+
+The model must use interactive execution and inspect actual output to request terminal answers. Quiet output is not proof of stdin waiting. The persistent PTY does not provide an OS-atomic guarantee against a foreground process exiting between validation and a write; inputs are explicit single submissions and known stale requests are rejected. Password/authentication and full-screen programs remain native-terminal interactions.
+
+---
+
 # 0.10.11 验证记录
 
 2026-09-21，Apple Silicon，本地开发环境。

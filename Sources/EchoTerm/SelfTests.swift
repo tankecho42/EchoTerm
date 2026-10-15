@@ -177,6 +177,8 @@ import AppKit
             try await UsageSelfTests.run(check: check)
             try PerformanceSelfTests.run(check: check)
             try await BlockToolSelfTests.run(check: check)
+            try UserInteractionProtocolSelfTests.run(check: check)
+            try await UserInteractionSelfTests.run(check: check)
         } catch { failures += 1; print("FAIL unexpected error: \(error)") }
         print("\nEchoTerm: \(count - failures)/\(count) checks passed; \(failures) failures")
         return failures == 0

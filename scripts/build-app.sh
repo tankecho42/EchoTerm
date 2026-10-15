@@ -2,6 +2,14 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 configuration="${1:-debug}"
+build_root="${ECHOTERM_BUILD_ROOT:-$HOME/Library/Application Support/EchoTerm/Builds}"
+distribution_root="${ECHOTERM_DIST_ROOT:-$PWD/dist}"
+build_root="${build_root:A}"
+distribution_root="${distribution_root:A}"
+if [[ "$build_root" == "$distribution_root" || "$distribution_root/" == "$build_root/EchoTerm.app/"* || "$build_root/" == "$distribution_root/EchoTerm.app/"* ]]; then
+    print -u2 'Build and distribution directories must be separate; distribution cannot be inside the app.'
+    exit 1
+fi
 swift build -c "$configuration"
 binary_dir="$(swift build -c "$configuration" --show-bin-path)"
 # Sign outside Documents: File Provider can re-create FinderInfo during signing.
@@ -10,9 +18,8 @@ trap 'rm -rf "$staging_dir"' EXIT
 staging_app="$staging_dir/EchoTerm.app"
 # File Provider reattaches FinderInfo even after a successful in-place signature.
 # Keep the runnable bundle outside synced Documents; dist contains a link and a zip.
-build_root="${ECHOTERM_BUILD_ROOT:-$HOME/Library/Application Support/EchoTerm/Builds}"
 app_path="$build_root/EchoTerm.app"
-mkdir -p "$staging_app/Contents/MacOS" "$staging_app/Contents/Resources" "$PWD/dist" "$build_root"
+mkdir -p "$staging_app/Contents/MacOS" "$staging_app/Contents/Resources" "$distribution_root" "$build_root"
 cp "$binary_dir/EchoTerm" "$staging_app/Contents/MacOS/EchoTerm"
 cp scripts/Info.plist "$staging_app/Contents/Info.plist"
 ditto --norsrc --noextattr "$binary_dir/EchoTerm_EchoTerm.bundle" "$staging_app/Contents/Resources/EchoTerm_EchoTerm.bundle"
@@ -34,13 +41,13 @@ else
     print -u2 'Packaging failed; previous bundle restored.'
     exit 1
 fi
-if [[ -L "$PWD/dist/EchoTerm.app" ]]; then
-    rm "$PWD/dist/EchoTerm.app"
-elif [[ -d "$PWD/dist/EchoTerm.app" ]]; then
-    rm -rf "$PWD/dist/EchoTerm.app"
+if [[ -L "$distribution_root/EchoTerm.app" ]]; then
+    rm "$distribution_root/EchoTerm.app"
+elif [[ -d "$distribution_root/EchoTerm.app" ]]; then
+    rm -rf "$distribution_root/EchoTerm.app"
 fi
-ln -s "$app_path" "$PWD/dist/EchoTerm.app"
-ditto -c -k --norsrc --noextattr --keepParent "$app_path" "$PWD/dist/.EchoTerm.zip.partial"
-mv -f "$PWD/dist/.EchoTerm.zip.partial" "$PWD/dist/EchoTerm.zip"
+ln -s "$app_path" "$distribution_root/EchoTerm.app"
+ditto -c -k --norsrc --noextattr --keepParent "$app_path" "$distribution_root/.EchoTerm.zip.partial"
+mv -f "$distribution_root/.EchoTerm.zip.partial" "$distribution_root/EchoTerm.zip"
 print "Built: $app_path"
-print "Distribution: $PWD/dist/EchoTerm.app and EchoTerm.zip"
+print "Distribution: $distribution_root/EchoTerm.app and EchoTerm.zip"

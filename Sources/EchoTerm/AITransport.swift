@@ -12,11 +12,13 @@ enum AIClient {
         "type": "object", "properties": [
             "command": ["type": "string", "description": "在当前 macOS shell 中运行的完整命令"],
             "explanation": ["type": "string", "description": "简短说明执行目的"],
-            "risk": ["type": "string", "enum": ["read", "write", "destructive"]]
-        ], "required": ["command", "explanation", "risk"], "additionalProperties": false
+            "risk": ["type": "string", "enum": ["read", "write", "destructive"]],
+            "interactive": ["type": "boolean", "description": "命令可能询问普通选项或等待 stdin 时必须为 true；否则为 false。交互命令尽快返回 command_id，后续用 ask_user / wait_command 处理原命令。"]
+        ], "required": ["command", "explanation", "risk", "interactive"], "additionalProperties": false
     ]
     static func request(config: ProviderConfiguration, key: String, messages: [[String: Any]], context: String,
-                        mode: AssistantMode = .answer, streaming: Bool = true, purpose: AIRequestPurpose = .conversation, allowsBlockTools: Bool = false) throws -> URLRequest {
+                        mode: AssistantMode = .answer, streaming: Bool = true, purpose: AIRequestPurpose = .conversation, allowsBlockTools: Bool = false,
+                        allowsUserInteraction: Bool = false, allowsCommandControl: Bool = false) throws -> URLRequest {
         let config = purpose != .conversation ? config.fastConfiguration : config
         let endpoint = config.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let base = URL(string: endpoint), let host = base.host, base.user == nil, base.password == nil,
@@ -29,22 +31,30 @@ enum AIClient {
         request.httpMethod = "POST"; request.timeoutInterval = purpose != .conversation ? 8 : 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(streaming && purpose == .conversation ? "text/event-stream" : "application/json", forHTTPHeaderField: "Accept")
+        let questionAccess = allowsUserInteraction && purpose == .conversation
+        let commandControl = allowsCommandControl && purpose == .conversation
         let instruction = purpose == .tabTitle ? QuickTabTitle.instructions : purpose == .intent ? QuickIntent.instructions : mode == .answer
-            ? "当前为问答模式。只回答用户主动提出的问题。可以按需查看区块、应用户要求导航。不执行、不填入 Shell 命令，不声称已执行命令。命令示例可以用代码展示。"
+            ? "当前为问答模式。只回答用户主动提出的问题。可以按需查看区块、应用户要求导航。不启动或填入新的 Shell 命令，不声称已执行新的命令。命令示例可以用代码展示。" + (commandControl ? "本轮仍可通过提供的工具等待、检查先前已经启动的命令；只在真实输入提示出现后向用户提问。" : "")
             : """
             当前为自主操控模式。先判断用户要回顾历史还是进行新的操作：查找先前命令、对话或共同操作时，优先遵循 EchoTerm 内部区块检索规则；需要新的实际操作或排查时，才用 execute_command 执行命令并读取结果。
-            每次只运行一条完整命令，等待退出码和输出再决定下一步。命令使用当前 shell，会保留目录和环境。
+            每次只运行一条完整命令。命令使用当前 shell，会保留目录和环境。取得退出码和输出后再决定新的执行操作。
             只操作用户当前任务需要的内容。先检查再修改，不做无关删除、不发送消息或发布内容。
-            使用非交互命令；不要启动持续监听服务、全屏程序或要求输入密码的命令。命令有执行时限，超时会中断。
-            遇到需要用户输入、登录或授权的情况，说明原因并结束本轮。不要反复重试同一个失败操作。完成后简洁总结实际结果。
+            不要启动持续监听服务、全屏程序或要求输入密码的命令。命令有执行时限，超时会中断。
+            不要反复重试同一个失败操作。完成后简洁总结实际结果。
             """
         let blockAccess = allowsBlockTools && purpose == .conversation
         let historyInstruction = purpose == .conversation ? "\n" + (blockAccess ? BlockTools.instructions : BlockTools.unavailableInstructions) : ""
-        let system = systemPrompt + "\n" + instruction + historyInstruction + (context.isEmpty ? "" : "\n<terminal_context>\n\(context)\n</terminal_context>")
+        // Starting the first interactive command precedes having a handle to expose wait_command.
+        let interactiveExecution = mode == .autonomous && questionAccess
+        let interactionInstruction = (questionAccess ? "\n" + InteractionTools.questionInstructions : "")
+            + (commandControl || interactiveExecution ? "\n" + InteractionTools.commandInstructions : mode == .autonomous && purpose == .conversation ? "\n本轮没有交互命令控制工具。仅使用 interactive: false 的非交互命令；遇到需要输入、登录或授权时，请用户直接在原生终端操作并结束本轮。" : "")
+        let system = systemPrompt + "\n" + instruction + historyInstruction + interactionInstruction + (context.isEmpty ? "" : "\n<terminal_context>\n\(context)\n</terminal_context>")
         var body: [String: Any] = ["model": config.model, "stream": streaming]
         var definitions: [(name: String, description: String, parameters: [String: Any])] = []
         if mode == .autonomous && purpose == .conversation { definitions.append((executeTool, "进行新的终端操作或排查，返回真实输出、退出码和目录。查找 EchoTerm 先前命令、对话或操作应先用内部区块工具，不要首先执行 Shell History 查询。", parameters)) }
         if blockAccess { for name in [BlockTools.read, BlockTools.jump, BlockTools.list] { definitions.append((name, BlockTools.description(name), BlockTools.schema(name))) } }
+        if questionAccess { definitions.append((InteractionTools.ask, InteractionTools.description(InteractionTools.ask), InteractionTools.schema(InteractionTools.ask))) }
+        if commandControl { definitions.append((InteractionTools.wait, InteractionTools.description(InteractionTools.wait), InteractionTools.schema(InteractionTools.wait))) }
         switch config.apiProtocol {
         case .responses:
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -123,8 +133,9 @@ enum AIClient {
     }
     static func send(config: ProviderConfiguration, key: String, messages: [[String: Any]], context: String,
                      mode: AssistantMode = .answer, streaming: Bool = true, purpose: AIRequestPurpose = .conversation, allowsBlockTools: Bool = false,
+                     allowsUserInteraction: Bool = false, allowsCommandControl: Bool = false,
                      onUpdate: @escaping @MainActor (AIStreamUpdate) -> Void = { _ in }) async throws -> AIReply {
-        let request = try request(config: config, key: key, messages: messages, context: context, mode: mode, streaming: streaming, purpose: purpose, allowsBlockTools: allowsBlockTools)
+        let request = try request(config: config, key: key, messages: messages, context: context, mode: mode, streaming: streaming, purpose: purpose, allowsBlockTools: allowsBlockTools, allowsUserInteraction: allowsUserInteraction, allowsCommandControl: allowsCommandControl)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForResource = purpose != .conversation ? 10 : 600
         let session = URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)

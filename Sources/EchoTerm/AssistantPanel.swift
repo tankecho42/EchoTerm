@@ -22,7 +22,7 @@ struct AssistantBubble: View {
     var move: (CGSize, Bool) -> Void = { _, _ in }
     private var contentHeight: CGFloat {
         if messages.isEmpty { return 85 }
-        if !showHistory, let reply = replies.last, reply.text.isEmpty && reply.steps.isEmpty { return min(maxBodyHeight, 70) }
+        if !showHistory, let reply = replies.last, reply.text.isEmpty && reply.steps.isEmpty && assistant.questions(for: reply.id).isEmpty { return min(maxBodyHeight, 70) }
         return maxBodyHeight
     }
     var body: some View { bubble }
@@ -80,6 +80,7 @@ struct AssistantBubble: View {
                 }.frame(height: contentHeight)
                     .onChange(of: replies.last?.text) { _, _ in if thinking && !showHistory { reader.scrollTo("reply-end", anchor: .bottom) } }
                     .onChange(of: replies.last?.steps.count) { _, _ in if !showHistory { reader.scrollTo("reply-end", anchor: .bottom) } }
+                    .onChange(of: assistant.userQuestions.count) { _, _ in if !showHistory { reader.scrollTo("reply-end", anchor: .bottom) } }
             }
             if let error = session.insertionError { Text(error).font(.system(size: 10)).foregroundStyle(theme.muted) }
             Divider().opacity(0.35)
