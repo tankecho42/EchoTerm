@@ -17,6 +17,9 @@ struct TerminalPane: View {
     @State private var completionTask: Task<Void, Never>?
     @State private var visibleBlockID: UUID?
     @State private var followBottom = true
+    @State private var auxiliaryInputVisible = false
+    @State private var commandInputDrafts: [UUID: String] = [:]
+    @State private var questionInputDrafts: [UUID: String] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var theme: TerminalTheme { preferences.theme }
     private var active: Bool { workspace.activeSession?.id == session.id }
@@ -30,7 +33,7 @@ struct TerminalPane: View {
             if isSplit { paneHeader }
             GeometryReader { viewport in
                 if session.presentsInteractiveTerminal {
-                    interactiveTerminal
+                    interactiveTerminal(viewportHeight: viewport.size.height)
                         .frame(width: viewport.size.width, height: viewport.size.height)
                 } else {
                     ScrollViewReader { reader in
@@ -124,6 +127,13 @@ struct TerminalPane: View {
         .onDisappear { completionTask?.cancel() }
         .onChange(of: active) { _, value in if value { session.focus() } }
         .onChange(of: session.ready) { _, value in if value && active { session.focus() } }
+        .onChange(of: session.presentsInteractiveTerminal) { _, presented in
+            // The transcript observers are detached while the native viewport
+            // runs. Start that view following the live command, unless a block
+            // was explicitly pinned; returning to history can opt out again.
+            if presented && session.readingAnchorID == nil { followBottom = true }
+        }
+        .onChange(of: session.runningBlockID) { _, _ in auxiliaryInputVisible = false }
         .onChange(of: session.commandCatalog.names) { _, _ in updateCompletions() }
         .onChange(of: session.directory) { _, _ in updateCompletions() }
         .onChange(of: session.draft) { _, _ in
@@ -131,25 +141,84 @@ struct TerminalPane: View {
             updateCompletions()
         }
     }
-    private var interactiveTerminal: some View {
+    private func interactiveTerminal(viewportHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: 9) {
-                Image(systemName: "terminal").foregroundStyle(theme.accent)
-                Text(session.blocks.first(where: { $0.id == session.runningBlockID })?.command ?? "终端")
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 8)
-                Text("交互终端").foregroundStyle(theme.muted)
-                if !session.alternateScreen {
-                    Button("返回区块") { session.interactiveView = false; session.focus() }
-                        .buttonStyle(.plain).foregroundStyle(theme.accent)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "terminal").foregroundStyle(theme.accent)
+                    Text(session.blocks.first(where: { $0.id == session.runningBlockID })?.command ?? "终端")
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Text(auxiliaryInputVisible ? "辅助输入" : "键盘输入").foregroundStyle(theme.muted)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-            }.font(.system(size: 11, design: .monospaced))
-                .padding(.horizontal, 12).frame(height: 29)
+                HStack(spacing: 12) {
+                    Button(auxiliaryInputTitle) {
+                        if auxiliaryInputVisible { returnToKeyboard() }
+                        else { auxiliaryInputVisible = true }
+                    }.foregroundStyle(theme.accent)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(auxiliaryInputVisible ? "收起辅助输入，直接向当前命令键入" : "显示选项、文本输入与按键按钮")
+                    if !session.alternateScreen {
+                        Button("返回区块") {
+                            auxiliaryInputVisible = false; workspace.assistantWantsFocus = false
+                            session.interactiveView = false
+                        }.foregroundStyle(theme.muted).fixedSize(horizontal: true, vertical: false)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        if session.agentOwner != nil { assistant.cancel(session: session) }
+                        else { session.interrupt() }
+                    } label: { Image(systemName: "stop.fill").frame(width: 20, height: 20) }
+                        .foregroundStyle(theme.accent)
+                        .help(session.agentOwner != nil ? "停止 Echo 当前任务  ⌘." : "中断当前命令  ⌃C")
+                        .accessibilityLabel(session.agentOwner != nil ? "停止 Echo 当前任务" : "中断当前命令")
+                }
+                .buttonStyle(.plain).lineLimit(1).fixedSize(horizontal: false, vertical: true)
+            }.font(.system(size: 10, design: .monospaced)).padding(.horizontal, 12).padding(.vertical, 8)
             Rectangle().fill(theme.line).frame(height: 1)
-            TerminalHost(session: session, preferences: preferences, active: active && !workspace.assistantWantsFocus)
+            TerminalHost(session: session, preferences: preferences,
+                         active: active && !workspace.assistantWantsFocus && !auxiliaryInputVisible,
+                         nativeInputAllowed: active && !workspace.assistantWantsFocus,
+                         onNativeFocusRequested: {
+                             guard !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil else { return }
+                             returnToKeyboard()
+                         })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(session.agentOwner == nil)
+            if auxiliaryInputVisible, let blockID = session.runningBlockID {
+                Rectangle().fill(theme.line).frame(height: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(pendingQuestions) { question in
+                            UserQuestionView(question: question, session: session, assistant: assistant,
+                                             workspace: workspace, preferences: preferences, expandTerminalInput: true,
+                                             draftBinding: questionDraft(question.id))
+                        }
+                        RunningCommandInput(blockID: blockID, draft: commandDraft(blockID), session: session,
+                                            workspace: workspace, assistant: assistant, preferences: preferences)
+                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(height: min(260, max(84, viewportHeight * 0.42)))
+                    .accessibilityLabel("当前命令的辅助输入")
+            }
         }
+    }
+    private var pendingQuestions: [UserQuestion] {
+        assistant.userQuestions.values.filter { $0.sessionID == session.id && $0.state == .pending }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+    private var auxiliaryInputTitle: String {
+        if auxiliaryInputVisible { return "返回键盘" }
+        return pendingQuestions.isEmpty ? "辅助输入" : "辅助输入 ·\(pendingQuestions.count)"
+    }
+    private func commandDraft(_ blockID: UUID) -> Binding<String> {
+        Binding(get: { commandInputDrafts[blockID] ?? "" }, set: { commandInputDrafts[blockID] = $0 })
+    }
+    private func questionDraft(_ questionID: UUID) -> Binding<String> {
+        Binding(get: { questionInputDrafts[questionID] ?? "" }, set: { questionInputDrafts[questionID] = $0 })
+    }
+    private func returnToKeyboard() {
+        auxiliaryInputVisible = false; workspace.assistantWantsFocus = false
+        workspace.selectSession(session.id); session.interactiveView = true; session.focus()
     }
     private var paneHeader: some View {
         HStack(spacing: 7) {
@@ -170,9 +239,17 @@ struct TerminalPane: View {
                                 interrupt: { if session.agentOwner != nil { assistant.cancel(session: session) } else { session.interrupt() } },
                                 interactive: { session.interactiveView.toggle(); if session.interactiveView { session.focus() } }) {
             if running {
-                RunningCommandInput(blockID: block.id, session: session, workspace: workspace,
-                                    assistant: assistant, preferences: preferences).id(block.id)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { runningInputButtons; Spacer(minLength: 0) }
+                    VStack(alignment: .leading, spacing: 8) { runningInputButtons }
+                }.font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(theme.accent)
             }
+        }
+    }
+    @ViewBuilder private var runningInputButtons: some View {
+        Button("键盘输入") { returnToKeyboard() }
+        Button("辅助输入") {
+            workspace.selectSession(session.id); auxiliaryInputVisible = true; session.interactiveView = true
         }
     }
     private var inputBlock: some View {
@@ -205,6 +282,18 @@ struct TerminalPane: View {
             if let error = session.insertionError { Text(error).font(.system(size: 10)).foregroundStyle(.orange).padding(.horizontal, 16) }
         }.padding(.bottom, 22).frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.accent.opacity(session.selectedBlockID == nil && active ? 0.025 : 0))
+            .task {
+                // Let the outgoing native viewport detach before requesting the
+                // newly mounted block editor; state changes can precede its window.
+                await Task.yield()
+                guard !Task.isCancelled, active, followBottom, session.ready, !session.exited,
+                      assistant.canStartBlock(in: session), session.readingAnchorID == nil,
+                      !workspace.assistantWantsFocus, !workspace.showSettings, !session.showSearch,
+                      !workspace.pendingQuit, workspace.pendingClose == nil,
+                      session.selectedBlockID == nil || session.selectedBlockID == session.blocks.last?.id else { return }
+                session.selectedBlockID = nil
+                session.focus()
+            }
     }
     private var inputHint: some View {
         HStack(spacing: 7) {
@@ -243,13 +332,13 @@ struct TerminalPane: View {
 /// Manual input is always an explicit affordance, independent of output heuristics.
 private struct RunningCommandInput: View {
     let blockID: UUID
+    @Binding var draft: String
     @ObservedObject var session: TerminalSession
     @ObservedObject var workspace: Workspace
     @ObservedObject var assistant: AssistantStore
     @ObservedObject var preferences: Preferences
-    @State private var expanded = false
-    @State private var draft = ""
     @State private var error: String?
+    @FocusState private var inputFocused: Bool
     private var theme: TerminalTheme { preferences.theme }
     private var enabled: Bool {
         session.running && session.runningBlockID == blockID && !session.exited &&
@@ -264,37 +353,50 @@ private struct RunningCommandInput: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Button { expanded.toggle() } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8))
-                    Text("向命令输入").font(.system(size: 10, weight: .medium))
-                    Spacer(minLength: 0)
-                }.padding(.vertical, 4).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(theme.accent)
-                .accessibilityLabel(expanded ? "收起向命令输入" : "展开向命令输入")
-            if expanded {
-                Text(session.agentOwner != nil ? "输入将发送到 Echo 正在执行的这条命令。" : "输入将发送到上方正在运行的命令。")
-                    .font(.system(size: 10)).foregroundStyle(theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                TextField("单行输入", text: $draft).textFieldStyle(EchoTextFieldStyle())
-                    .font(Font(preferences.terminalFont)).autocorrectionDisabled(true)
-                    .onSubmit(sendDraft).disabled(!enabled)
-                    .accessibilityLabel("发送给当前运行命令的单行内容")
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 7) { actions; Spacer(minLength: 0) }
-                    VStack(alignment: .leading, spacing: 7) { actions }
-                }.buttonStyle(EchoButtonStyle())
-                if let message = validation ?? error {
-                    Text(message).font(.system(size: 10)).foregroundStyle(.orange)
-                }
+            Text("发送到当前命令").font(.system(size: 10, weight: .medium)).foregroundStyle(theme.accent)
+            Text(session.agentOwner != nil ? "Echo 正在执行这条命令。文本会附带 Return 一起发送。" : "文本会附带 Return 发送到这条命令。")
+                .font(.system(size: 10)).foregroundStyle(theme.muted).fixedSize(horizontal: false, vertical: true)
+            TextField("单行输入", text: $draft).textFieldStyle(EchoTextFieldStyle())
+                .font(Font(preferences.terminalFont)).autocorrectionDisabled(true).focused($inputFocused)
+                .onSubmit(sendDraft).disabled(!enabled)
+                .accessibilityLabel("发送给当前运行命令的单行内容")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 7) { actions; Spacer(minLength: 0) }
+                VStack(alignment: .leading, spacing: 7) { actions }
+            }.buttonStyle(EchoButtonStyle())
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 85), spacing: 6)], alignment: .leading, spacing: 6) {
+                Button("y + Return") { send("y") }.accessibilityLabel("向当前命令发送 y 并按 Return")
+                Button("n + Return") { send("n") }.accessibilityLabel("向当前命令发送 n 并按 Return")
+                Button("Return") { send("") }.accessibilityLabel("向当前命令仅发送 Return 空行")
+            }.buttonStyle(EchoButtonStyle()).disabled(!enabled)
+            Text("单独按键").font(.system(size: 9)).foregroundStyle(theme.muted)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 6)], alignment: .leading, spacing: 6) {
+                keyButton("↑", key: .up, label: "上方向键")
+                keyButton("↓", key: .down, label: "下方向键")
+                keyButton("←", key: .left, label: "左方向键")
+                keyButton("→", key: .right, label: "右方向键")
+                keyButton("Tab", key: .tab, label: "Tab 键")
+                keyButton("Esc", key: .escape, label: "Escape 键")
+            }.buttonStyle(EchoButtonStyle()).disabled(!enabled)
+            if let message = validation ?? error {
+                Text(message).font(.system(size: 10)).foregroundStyle(.orange)
             }
-        }.padding(.leading, 23).frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: inputFocused) { _, focused in
+                if focused { workspace.selectSession(session.id); workspace.assistantWantsFocus = true }
+                else if workspace.activeSession?.id == session.id { workspace.assistantWantsFocus = false }
+            }
+            .onDisappear { if inputFocused && workspace.activeSession?.id == session.id { workspace.assistantWantsFocus = false } }
+    }
+    private func keyButton(_ title: String, key: TerminalInputKey, label: String) -> some View {
+        Button(title) {
+            guard enabled else { return }
+            if assistant.sendCommandKey(key, session: session, expectedBlockID: blockID) { error = nil }
+            else { error = "此命令已结束或按键不可用。" }
+        }.accessibilityLabel("向当前命令发送\(label)")
     }
     @ViewBuilder private var actions: some View {
         Button("发送", action: sendDraft).disabled(!enabled || draft.isEmpty || validation != nil)
-        Button("仅发送 Return") { send("") }.disabled(!enabled)
-            .help("向这条命令发送一个空行")
-            .accessibilityLabel("向当前命令仅发送 Return 空行")
         Button("中断 ⌃C") {
             if session.agentOwner != nil { assistant.cancel(session: session) }
             else { session.interrupt() }
@@ -414,6 +516,8 @@ struct TerminalHost: NSViewRepresentable {
     @ObservedObject var session: TerminalSession
     @ObservedObject var preferences: Preferences
     var active: Bool
+    var nativeInputAllowed: Bool? = nil
+    var onNativeFocusRequested: () -> Void = { }
     @Environment(\.isEnabled) private var isEnabled
     func makeNSView(context: Context) -> TerminalViewport { TerminalViewport(terminal: session.terminal) }
     func updateNSView(_ viewport: TerminalViewport, context: Context) {
@@ -426,13 +530,24 @@ struct TerminalHost: NSViewRepresentable {
         if view.nativeForegroundColor != foreground { view.nativeForegroundColor = foreground }
         view.caretColor = NSColor(preferences.theme.accent)
         view.applyPalette(preferences.theme)
-        let shouldFocus = active && isEnabled && session.agentOwner == nil
+        let allowsNativeInput = (nativeInputAllowed ?? active) && isEnabled
+        let shouldFocus = active && allowsNativeInput
         let wasAllowed = view.keyboardFocusAllowed
+        view.nativeInputAllowed = allowsNativeInput
+        view.onNativeFocusRequested = onNativeFocusRequested
         view.keyboardFocusAllowed = shouldFocus
+        if !allowsNativeInput, let window = view.window, window.firstResponder === view {
+            window.makeFirstResponder(nil)
+        }
         if shouldFocus && !wasAllowed { view.requestKeyboardFocus() }
     }
     static func dismantleNSView(_ view: TerminalViewport, coordinator: ()) {
         view.terminal.keyboardFocusAllowed = false
+        view.terminal.nativeInputAllowed = false
+        view.terminal.onNativeFocusRequested = nil
+        if let window = view.terminal.window, window.firstResponder === view.terminal {
+            window.makeFirstResponder(nil)
+        }
     }
 }
 

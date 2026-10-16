@@ -31,7 +31,6 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
     @Published var userQuestions: [UUID: UserQuestion] = [:]
     private var questionContinuations: [UUID: CheckedContinuation<String, Error>] = [:]
     private var questionMonitors: [UUID: Task<Void, Never>] = [:]
-    private var questionPauseStarted: [UUID: Date] = [:]
     private var commandStates: [UUID: AgentCommandState] = [:]
     private var commandMonitors: [UUID: Task<Void, Never>] = [:]
     private var intentTasks: [UUID: Task<Void, Never>] = [:]
@@ -148,6 +147,10 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         conversations[id, default: []].append(.init(id: replyID, role: "assistant", text: "", isStreaming: true, runID: run))
         activeReplies[id] = replyID
         thinking.insert(id); phases[id] = "思考中…"; runs[id] = run; sessions[id] = session
+        session.onNativeCommandInput = { [weak self, weak session] blockID in
+            guard let self, let session else { return }
+            self.didReceiveNativeInput(session: session, blockID: blockID)
+        }
         tasks[id] = Task { [self] in
             defer { finishRun(session: session, run: run, replyID: activeReplies[id] ?? replyID) }
             var count = 0, lookups = 0, questions = 0, polls = 0, seenCalls: Set<String> = []
@@ -157,6 +160,12 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                 // One final summary request remains after the command budget is exhausted.
                 for round in 0...roundLimit {
                     try ensureActive(session: session, run: run, mode: mode)
+                    if let commandID = session.runningBlockID, commandStates[commandID]?.runID == run,
+                       refreshCommandPause(commandID, session: session), commandStates[commandID]?.nativeControl == true {
+                        setNativeControlStatus(session: session)
+                        let result = try await pollCommand(commandID, session: session, run: run, waitSeconds: nil)
+                        history.append(["role": "user", "content": "用户已在原生终端中完成这条命令。以下为实际结果，不要重放用户输入：\n" + commandJSON(result, session: session)])
+                    }
                     let lastRequest = round == roundLimit
                     let requestMode: AssistantMode = count >= limit || lastRequest ? .answer : mode
                     let allowsBlocks = preferences.shareContext && lookups < lookupLimit && !lastRequest
@@ -167,14 +176,48 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                     activities[id] = .thinking
                     phases[id] = count > 0 ? "读取结果，继续分析…" : "思考中…"
                     let segmentID = activeReplies[id] ?? replyID
+                    let requestCommandID = session.runningBlockID
+                    let requestNativeRevision = session.nativeInputRevision
                     let reply = try await transport(.init(config: config, messages: history, context: context, mode: requestMode, streaming: streaming, round: meter, allowsBlockTools: allowsBlocks, allowsUserInteraction: allowsQuestions, allowsCommandControl: allowsControl)) { [weak self] update in
                         guard let self, self.runs[id] == run, self.activeReplies[id] == segmentID, !Task.isCancelled else { return }
+                        if let commandID = requestCommandID, self.commandStates[commandID]?.runID == run,
+                           session.nativeControlActive || session.alternateScreen || self.commandStates[commandID]?.nativeControl == true {
+                            _ = self.refreshCommandPause(commandID, session: session)
+                            if session.runningBlockID == commandID { self.setNativeControlStatus(session: session) }
+                            else { self.phases[id] = "原生命令已结束，正在读取结果…"; self.activities[id] = .working }
+                            return
+                        }
                         self.phases[id] = update.phase
                         self.activities[id] = update.activity
                         self.changeMessage(id, segmentID) { $0.text = update.text }
                     }
                     try ensureActive(session: session, run: run, mode: mode)
                     changeMessage(id, segmentID) { $0.text = reply.text; $0.suggestions += reply.suggestions }
+                    if let commandID = requestCommandID, commandStates[commandID]?.runID == run {
+                        _ = refreshCommandPause(commandID, session: session)
+                        if commandStates[commandID]?.nativeControl == true || session.nativeInputRevision != requestNativeRevision {
+                            // The response was generated before the user took over. Pair
+                            // any valid call IDs with a result, but perform no stale action.
+                            var ids = seenCalls
+                            let validIDs = reply.calls.allSatisfy { !$0.id.isEmpty && ids.insert($0.id).inserted }
+                            if validIDs {
+                                seenCalls = ids; history += reply.continuation
+                                let result = BlockTools.json(["status": "native_input", "command_id": commandID.uuidString,
+                                                              "answer_omitted": true, "sent_to_terminal": false,
+                                                              "native_input_revision": session.nativeInputRevision])
+                                if !reply.calls.isEmpty { history += AIClient.toolResults(reply.calls.map { ($0, result) }, apiProtocol: config.apiProtocol) }
+                            }
+                            if let block = session.blocks.first(where: { $0.id == commandID }), block.finishedAt != nil,
+                               let state = commandStates[commandID] {
+                                history.append(["role": "user", "content": "原生交互已经结束；以下为原命令实际结果：\n" + commandJSON((block, state.timedOut, false, state.revision), session: session)])
+                            }
+                            changeMessage(id, segmentID) { $0.isStreaming = false; $0.activity = .awaitingUser; $0.status = "用户已在原生终端继续；未执行过时的工具调用。" }
+                            let next = UUID(); activeReplies[id] = next
+                            conversations[id, default: []].append(.init(id: next, role: "assistant", text: "", isStreaming: true, runID: run))
+                            session.appendAIBlock(question: "原生终端交互", replyID: next, continuation: true, mode: mode)
+                            continue
+                        }
+                    }
                     guard !reply.calls.isEmpty else {
                         if session.agentOwner == run && session.running { throw AIError.message("AI 在命令仍运行时结束了任务，已发送中断。可在终端查看结果或重新接管。") }
                         if count >= limit { changeMessage(id, segmentID) { $0.status = "已达到本轮 \(limit) 条命令上限" } }
@@ -215,8 +258,14 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                     history += reply.continuation
                     changeMessage(id, segmentID) { $0.isStreaming = false; $0.activity = .success }
                     var results: [(AIToolCall, String)] = []
+                    var nativeBatchCommandID: UUID?
                     for call in reply.calls {
                         try ensureActive(session: session, run: run, mode: mode)
+                        if let commandID = nativeBatchCommandID {
+                            results.append((call, BlockTools.json(["status": "native_input", "command_id": commandID.uuidString,
+                                                                   "answer_omitted": true, "sent_to_terminal": false])))
+                            continue
+                        }
                         activities[id] = .working
                         if let spec = questionSpecs[call.id] {
                             questions += 1
@@ -229,6 +278,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                             polls += 1; phases[id] = "等待命令结果…"
                             let result = try await pollCommand(commandID, session: session, run: run, waitSeconds: 2)
                             results.append((call, commandJSON(result, session: session)))
+                            if commandStates[commandID]?.nativeControl == true { nativeBatchCommandID = commandID }
                             continue
                         }
                         guard let command = commands[call.id] else {
@@ -251,6 +301,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                             if let index = message.steps.firstIndex(where: { $0.id == stepID }) { message.steps[index].status = result.running ? "执行中" : result.timedOut ? "已超时中断" : "exit \(result.block.exitCode ?? -1) · \(result.block.duration)" }
                         }
                         results.append((call, commandJSON(result, session: session)))
+                        if commandStates[result.block.id]?.nativeControl == true { nativeBatchCommandID = result.block.id }
                     }
                     changeMessage(id, segmentID) { $0.activity = .success }
                     // Append the next answer only after the tool commands have ended.
@@ -303,6 +354,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         let pollDeadline = waitSeconds.map { Date().addingTimeInterval($0) }
         while true {
             try ensureActive(session: session, run: run, mode: .autonomous)
+            let paused = refreshCommandPause(blockID, session: session)
             guard var state = commandStates[blockID], let storedBlock = session.blocks.first(where: { $0.id == blockID }) else { throw AIError.message("原命令区块已不存在，未继续操作。") }
             state.revision += 1
             if storedBlock.finishedAt != nil, storedBlock.exitCode != nil {
@@ -314,13 +366,14 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                 return (storedBlock, state.timedOut, false, state.revision)
             }
             guard session.running, session.runningBlockID == blockID, session.agentBlockID == blockID else { throw AIError.message("终端当前命令已变化，停止等待旧命令。") }
-            if !state.timedOut && Date() >= state.deadline {
+            if !paused && !state.timedOut && Date() >= state.deadline {
                 state.timedOut = true; state.interruptDeadline = Date().addingTimeInterval(4)
                 session.interrupt(); phases[session.id] = "命令超时，正在中断…"
             }
             commandStates[blockID] = state
             if state.timedOut && Date() >= state.interruptDeadline { throw AIError.message("命令超时，已发送 Ctrl-C，但进程尚未退出。自动操作已停止，可在终端手动接管。") }
-            if !state.timedOut, let pollDeadline, Date() >= pollDeadline {
+            if state.nativeControl { setNativeControlStatus(session: session) }
+            if !state.nativeControl, !state.timedOut, let pollDeadline, Date() >= pollDeadline {
                 var snapshot = storedBlock; snapshot.output = session.liveOutput
                 return (snapshot, false, true, state.revision)
             }
@@ -336,15 +389,51 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                          "command": ContextRedactor.redact(result.block.command),
                          "output": ContextRedactor.redact(String(result.block.output.suffix(24000))),
                          "exit_code": result.block.exitCode as Any? ?? NSNull(),
-                         "cwd": ContextRedactor.redact(session.directory), "timed_out": result.timedOut])
+                         "cwd": ContextRedactor.redact(session.directory), "timed_out": result.timedOut,
+                         "native_keyboard": true, "native_input_revision": session.nativeInputRevision,
+                         "alternate_screen": session.alternateScreen])
+    }
+    @discardableResult private func refreshCommandPause(_ blockID: UUID, session: TerminalSession) -> Bool {
+        guard var state = commandStates[blockID] else { return false }
+        if session.runningBlockID == blockID && (session.nativeControlActive || session.alternateScreen) { state.nativeControl = true }
+        let paused = state.nativeControl || userQuestions.values.contains { $0.runID == state.runID && $0.spec.commandID == blockID && $0.state == .pending }
+        if paused {
+            if state.pauseStarted == nil { state.pauseStarted = Date() }
+        } else if let start = state.pauseStarted {
+            state.deadline = state.deadline.addingTimeInterval(max(0, Date().timeIntervalSince(start)))
+            state.pauseStarted = nil
+        }
+        commandStates[blockID] = state
+        return paused
+    }
+    private func setNativeControlStatus(session: TerminalSession) {
+        if activities[session.id] != .awaitingUser { activities[session.id] = .awaitingUser }
+        let phase = "正在原生终端交互，命令结束后继续…"
+        if phases[session.id] != phase { phases[session.id] = phase }
+        if let replyID = activeReplies[session.id], conversations[session.id]?.first(where: { $0.id == replyID })?.activity != .awaitingUser {
+            changeMessage(session.id, replyID) { $0.activity = .awaitingUser }
+        }
+    }
+    private func didReceiveNativeInput(session: TerminalSession, blockID: UUID) {
+        guard let state = commandStates[blockID], runs[session.id] == state.runID,
+              session.agentOwner == state.runID, session.runningBlockID == blockID else { return }
+        _ = refreshCommandPause(blockID, session: session)
+        setNativeControlStatus(session: session)
+        let result = BlockTools.json(["status": "manual_input", "command_id": blockID.uuidString,
+                                      "sent_to_terminal": true, "answer_omitted": true])
+        for question in Array(userQuestions.values) where question.runID == state.runID && question.spec.commandID == blockID && question.state == .pending {
+            resolveQuestion(question.id, state: .answered, response: "已通过原生终端继续", result: .success(result))
+        }
     }
     private func monitorCommand(_ blockID: UUID, session: TerminalSession, run: UUID) {
         commandMonitors[blockID] = Task { [weak self, weak session] in
             while !Task.isCancelled {
                 guard let self, let session, self.runs[session.id] == run,
                       session.running, session.runningBlockID == blockID,
-                      session.agentOwner == run, var state = self.commandStates[blockID] else { return }
-                let paused = self.userQuestions.values.contains { $0.runID == run && $0.state == .pending && $0.spec.commandID == blockID }
+                      session.agentOwner == run else { return }
+                let paused = self.refreshCommandPause(blockID, session: session)
+                guard var state = self.commandStates[blockID] else { return }
+                if state.nativeControl { self.setNativeControlStatus(session: session) }
                 if !paused, !state.timedOut, Date() >= state.deadline {
                     state.timedOut = true; state.interruptDeadline = Date().addingTimeInterval(4)
                     self.commandStates[blockID] = state
@@ -382,6 +471,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
             return preferences.shareContext && session.agentOwner == question.runID && session.running &&
                 session.runningBlockID == commandID && session.agentBlockID == commandID &&
                 commandStates[commandID]?.runID == question.runID && commandStates[commandID]?.timedOut == false
+                && commandStates[commandID]?.nativeControl == false
         }
         return true
     }
@@ -419,10 +509,21 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         }
         return true
     }
+    @discardableResult func sendCommandKey(_ key: TerminalInputKey, session: TerminalSession, expectedBlockID: UUID) -> Bool {
+        if commandStates[expectedBlockID]?.timedOut == true { return false }
+        return session.sendKey(key, expectedBlockID: expectedBlockID)
+    }
     private func askUser(_ spec: UserQuestionSpec, session: TerminalSession, run: UUID, replyID: UUID) async throws -> String {
         guard !userQuestions.values.contains(where: { $0.sessionID == session.id && $0.state == .pending }) else { throw AIError.message("当前已有问题等待回答。") }
         if let commandID = spec.commandID {
             try validateCommand(commandID, session: session, run: run)
+            guard session.running, session.runningBlockID == commandID else {
+                return BlockTools.json(["status": "command_finished", "command_id": commandID.uuidString, "sent_to_terminal": false])
+            }
+            _ = refreshCommandPause(commandID, session: session)
+            if commandStates[commandID]?.nativeControl == true {
+                return BlockTools.json(["status": "native_input", "command_id": commandID.uuidString, "sent_to_terminal": false, "answer_omitted": true])
+            }
             if let state = commandStates[commandID], state.timedOut { throw AIError.message("原命令已经超时，不能再向它发送输入。") }
         }
         let id = UUID()
@@ -430,8 +531,8 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
             try await withCheckedThrowingContinuation { continuation in
                 guard runs[session.id] == run, !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
                 questionContinuations[id] = continuation
-                questionPauseStarted[id] = Date()
                 userQuestions[id] = .init(id: id, sessionID: session.id, replyID: replyID, runID: run, spec: spec)
+                if let commandID = spec.commandID { _ = refreshCommandPause(commandID, session: session) }
                 phases[session.id] = "等待你的回答…"; activities[session.id] = .awaitingUser
                 changeMessage(session.id, replyID) { $0.activity = .awaitingUser }
                 questionMonitors[id] = Task { [weak self, weak session] in
@@ -440,8 +541,12 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                         if self.runs[session.id] != run || session.exited {
                             self.resolveQuestion(id, state: .cancelled, result: .failure(CancellationError())); return
                         }
-                        if let commandID = spec.commandID, !self.canAnswerQuestion(id) {
-                            self.resolveQuestion(id, state: .expired, result: .success(BlockTools.json(["status": "command_finished", "command_id": commandID.uuidString, "sent_to_terminal": false]))); return
+                        if let commandID = spec.commandID {
+                            _ = self.refreshCommandPause(commandID, session: session)
+                            if !self.canAnswerQuestion(id) {
+                                let native = session.running && session.runningBlockID == commandID && self.commandStates[commandID]?.nativeControl == true
+                                self.resolveQuestion(id, state: .expired, result: .success(BlockTools.json(["status": native ? "native_input" : "command_finished", "command_id": commandID.uuidString, "sent_to_terminal": false, "answer_omitted": true]))); return
+                            }
                         }
                         if Date().timeIntervalSince(question.createdAt) >= 1800 {
                             self.resolveQuestion(id, state: .expired, result: .success(BlockTools.json(["status": "expired", "sent_to_terminal": false]))); return
@@ -457,12 +562,8 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
     private func resolveQuestion(_ id: UUID, state: UserQuestionState, response: String? = nil, result: Result<String, Error>) {
         guard let continuation = questionContinuations.removeValue(forKey: id), let question = userQuestions[id] else { return }
         questionMonitors.removeValue(forKey: id)?.cancel()
-        if let start = questionPauseStarted.removeValue(forKey: id), let commandID = question.spec.commandID,
-           var command = commandStates[commandID], command.runID == question.runID {
-            command.deadline = command.deadline.addingTimeInterval(Date().timeIntervalSince(start))
-            commandStates[commandID] = command
-        }
         userQuestions[id]?.state = state; userQuestions[id]?.response = response
+        if let commandID = question.spec.commandID, let session = sessions[question.sessionID] { _ = refreshCommandPause(commandID, session: session) }
         continuation.resume(with: result)
     }
     private func invalidateQuestions(sessionID: UUID, run: UUID) {

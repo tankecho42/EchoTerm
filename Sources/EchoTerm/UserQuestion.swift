@@ -23,4 +23,6 @@ struct AgentCommandState {
     var timedOut = false
     var interruptDeadline = Date.distantFuture
     var revision = 0
+    var nativeControl = false
+    var pauseStarted: Date?
 }

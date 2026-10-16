@@ -8,27 +8,34 @@ struct UserQuestionView: View {
     @ObservedObject var assistant: AssistantStore
     @ObservedObject var workspace: Workspace
     @ObservedObject var preferences: Preferences
+    var expandTerminalInput = false
+    var draftBinding: Binding<String>? = nil
     @State private var draft = ""
     @State private var submissionError: String?
+    @State private var terminalInputExpanded = false
+    @FocusState private var inputFocused: Bool
 
     private var theme: TerminalTheme { preferences.theme }
     private var terminalBound: Bool { question.spec.commandID != nil }
+    private var answerDraft: Binding<String> { draftBinding ?? $draft }
+    private var text: String { answerDraft.wrappedValue }
+    private var showsInputControls: Bool { !terminalBound || expandTerminalInput || terminalInputExpanded || question.state != .pending }
     private var destination: String { terminalBound ? "发送到当前命令" : "回复 Echo" }
     private var answerable: Bool { question.state == .pending && assistant.canAnswerQuestion(question.id) }
     private var controlsEnabled: Bool {
         answerable && !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil
     }
     private var validation: String? {
-        if terminalBound && draft.utf8.count > 4_096 { return "命令输入最多 4096 字节（UTF-8）。" }
-        if !terminalBound && draft.count > 16_000 { return "最多输入 16000 个字符。" }
-        if draft.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) { return "请只输入一行内容。" }
-        if terminalBound && draft.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+        if terminalBound && text.utf8.count > 4_096 { return "命令输入最多 4096 字节（UTF-8）。" }
+        if !terminalBound && text.count > 16_000 { return "最多输入 16000 个字符。" }
+        if text.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) { return "请只输入一行内容。" }
+        if terminalBound && text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
             return "命令输入不能包含控制字符。"
         }
         return nil
     }
     private var hasInput: Bool {
-        terminalBound ? !draft.isEmpty : !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        terminalBound ? !text.isEmpty : !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     private var command: CommandBlock? {
         guard let id = question.spec.commandID else { return nil }
@@ -72,7 +79,17 @@ struct UserQuestionView: View {
                 }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.text.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
             }
-            if !question.spec.options.isEmpty {
+            if terminalBound && question.state == .pending && !expandTerminalInput {
+                Button(terminalInputExpanded ? "返回键盘" : "选项 / 文本输入") {
+                    terminalInputExpanded.toggle()
+                    if !terminalInputExpanded {
+                        inputFocused = false; workspace.assistantWantsFocus = false
+                        workspace.selectSession(session.id); session.interactiveView = true; session.focus()
+                    }
+                }.buttonStyle(EchoButtonStyle())
+                    .accessibilityLabel(terminalInputExpanded ? "收起辅助输入并返回原生键盘" : "展开此问题的选项与文本输入")
+            }
+            if showsInputControls && !question.spec.options.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(question.spec.options, id: \.id) { option in
                         Button { answer(optionID: option.id) } label: {
@@ -95,11 +112,12 @@ struct UserQuestionView: View {
                     }
                 }
             }
-            if question.spec.allowCustom && question.state == .pending {
+            if showsInputControls && question.spec.allowCustom && question.state == .pending {
                 VStack(alignment: .leading, spacing: 7) {
-                    TextField(terminalBound ? "输入给当前命令的内容" : "其他回答", text: $draft)
+                    TextField(terminalBound ? "输入给当前命令的内容" : "其他回答", text: answerDraft)
                         .textFieldStyle(EchoTextFieldStyle()).font(.system(size: 11))
                         .autocorrectionDisabled(true).onSubmit(submitDraft)
+                        .focused($inputFocused)
                         .disabled(!controlsEnabled)
                         .accessibilityLabel(terminalBound ? "发送给当前命令的单行内容" : "回复 Echo 的内容")
                     ViewThatFits(in: .horizontal) {
@@ -135,6 +153,11 @@ struct UserQuestionView: View {
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.accent.opacity(0.2)).allowsHitTesting(false))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Echo 提问，\(destination)")
+            .onChange(of: inputFocused) { _, focused in
+                if focused { workspace.selectSession(session.id); workspace.assistantWantsFocus = true }
+                else if workspace.activeSession?.id == session.id { workspace.assistantWantsFocus = false }
+            }
+            .onDisappear { if inputFocused && workspace.activeSession?.id == session.id { workspace.assistantWantsFocus = false } }
     }
 
     @ViewBuilder private var submitButtons: some View {
@@ -147,12 +170,12 @@ struct UserQuestionView: View {
     }
     private func submitDraft() {
         guard controlsEnabled, hasInput, validation == nil else { return }
-        answer(text: draft)
+        answer(text: text)
     }
     private func answer(optionID: String? = nil, text: String? = nil) {
         guard controlsEnabled else { return }
         if assistant.answerQuestion(question.id, optionID: optionID, text: text) {
-            draft = ""; submissionError = nil
+            answerDraft.wrappedValue = ""; submissionError = nil
         } else { submissionError = "此问题暂时无法提交，请查看当前状态。" }
     }
 }

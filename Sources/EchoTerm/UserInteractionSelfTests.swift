@@ -1,4 +1,5 @@
 #if DEBUG
+import AppKit
 import Foundation
 
 @MainActor enum UserInteractionSelfTests {
@@ -9,6 +10,10 @@ import Foundation
         for shell in ["/bin/zsh", "/bin/bash"] { try await terminalQuestions(shell: shell, check: check) }
         try await completedCommandInvalidatesQuestion(check: check)
         try await manualInputRetiresQuestion(check: check)
+        for shell in ["/bin/zsh", "/bin/bash"] { try await nativeKeyboardRetiresQuestion(shell: shell, check: check) }
+        try await lateQuestionAfterNativeInput(check: check)
+        try await nativeAndPresetByteBoundaries(check: check)
+        try await tuiEntryPausesDeadline(check: check)
         try await timeoutDuringStalledTransport(check: check)
     }
 
@@ -129,7 +134,10 @@ import Foundation
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = Preferences(defaults: defaults), providers = providerStore(defaults)
         preferences.quickIntents = false; preferences.assistantMode = .autonomous
-        preferences.agentStepLimit = 1; preferences.commandTimeout = 1
+        // Initial interactive polling already consumes ~0.8 s. Keep ordinary
+        // execution margin for PTY scheduling while still waiting longer than
+        // the entire timeout to prove the human-answer pause below.
+        preferences.agentStepLimit = 1; preferences.commandTimeout = 2
         let session = TerminalSession(directory: "/tmp", loadShellConfig: false, shellPath: shell)
         session.usesBlockEditor = true; session.start(); defer { session.close() }
         try await wait { session.ready }
@@ -159,7 +167,7 @@ import Foundation
         let first = assistant.userQuestions.values.first { $0.state == .pending }!
         // This is a deliberately simulated human delay, longer than the execution
         // timeout; assertions below observe state rather than a timer firing order.
-        try await Task.sleep(nanoseconds: 1_250_000_000)
+        try await Task.sleep(nanoseconds: 2_250_000_000)
         check(session.running && assistant.canAnswerQuestion(first.id), "\(shell) time waiting for a human answer is excluded from the command execution timeout")
         check(assistant.answerQuestion(first.id, optionID: "option-2"), "\(shell) a button sends its value to the original interactive command")
         try await wait { assistant.userQuestions.values.contains { $0.id != first.id && $0.state == .pending } }
@@ -167,7 +175,27 @@ import Foundation
         check(!assistant.answerQuestion(first.id, optionID: "option-1") && assistant.answerQuestion(second.id, text: custom), "\(shell) a successive prompt accepts custom Unicode text while rejecting the previous prompt's button")
         try await wait { !assistant.thinking.contains(session.id) && !session.running }
         let blocks = session.blocks.filter { !$0.isAI }
-        check(blocks.count == 1 && blocks[0].id == commandID && blocks[0].exitCode == 0 && blocks[0].output.contains("INPUTS:beta|\(custom)"), "\(shell) both inputs complete the same real command without evaluating input as shell syntax")
+        let completedAsExpected = blocks.count == 1 && blocks[0].id == commandID && blocks[0].exitCode == 0 && blocks[0].output.contains("INPUTS:beta|\(custom)")
+        if !completedAsExpected {
+            // Every byte below belongs to this disposable, credential-free
+            // fixture. Record failures only; never log production session data.
+            let toolStatuses: [[String: Any]] = requests.flatMap { request in
+                request.messages.compactMap { message -> [String: Any]? in
+                    guard message["role"] as? String == "tool", let text = message["content"] as? String,
+                          let result = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return nil }
+                    var status: [String: Any] = [:]
+                    for field in ["status", "running", "timed_out", "exit_code", "command_id"] { if let value = result[field] { status[field] = value } }
+                    return status
+                }
+            }
+            let details: [String: Any] = ["shell": shell, "expected_command_id": commandID?.uuidString ?? "missing",
+                "running": session.running, "request_count": requests.count,
+                "blocks": blocks.map { ["id": $0.id.uuidString, "exit_code": $0.exitCode as Any? ?? NSNull(), "finished": $0.finishedAt != nil,
+                                        "output_tail": String($0.output.suffix(2000))] as [String: Any] },
+                "assistant_statuses": assistant.messages(for: session).map(\.status), "tool_statuses": toolStatuses]
+            print("TERMINAL-QUESTIONS-FIXTURE-FAIL " + BlockTools.json(details))
+        }
+        check(completedAsExpected, "\(shell) both inputs complete the same real command without evaluating input as shell syntax")
         check(requests.count == 5 && requests[1].allowsCommandControl && requests[2].allowsCommandControl && requests[1].allowsUserInteraction && requests[2].allowsUserInteraction, "\(shell) the last allowed command retains input and wait tools after the start-command budget is exhausted")
         check(session.agentOwner == nil && assistant.userQuestions.values.allSatisfy { $0.state == .answered } && assistant.canStartBlock(in: session), "\(shell) command completion releases ownership and leaves no unresolved question")
     }
@@ -255,6 +283,219 @@ import Foundation
         try await wait { !assistant.thinking.contains(session.id) && !session.running }
         let block = session.blocks.first { $0.id == commandID }
         check(requests.count == 5 && block?.exitCode == 0 && block?.output.contains("MANUAL:\(manualValue)|second-answer") == true && block?.output.contains("stale-first-answer") == false, "Manual and card submissions advance two real prompts exactly once without stale input")
+    }
+
+    private static func nativeKeyboardRetiresQuestion(shell: String, check: (Bool, String) -> Void) async throws {
+        let suite = "EchoTerm.NativeOwnedQuestion.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults), providers = providerStore(defaults)
+        preferences.quickIntents = false; preferences.assistantMode = .autonomous; preferences.commandTimeout = 1
+        let session = TerminalSession(directory: "/tmp", loadShellConfig: false, shellPath: shell)
+        session.usesBlockEditor = true; session.start(); defer { session.close() }
+        let host = NativeTerminalTestHost(session: session, preferences: preferences); defer { host.close() }
+        try await wait { session.ready }
+        let command = "stty -echo; printf 'native-first: '; IFS= read -r native_first; printf '\\nnative-second: '; IFS= read -r native_second; stty echo; printf '\\nNATIVE-DONE\\n'"
+        let firstValue = "private-first-$(must-remain-literal)", secondValue = "私有输入 second"
+        var requests: [AIRequestContext] = []
+        let assistant = AssistantStore(providers: providers, preferences: preferences) { request, _ in
+            requests.append(request)
+            if requests.count == 1 { return try toolReply(calls: [("execute_command", ["command": command, "explanation": "Native AppKit stdin fixture", "risk": "read", "interactive": true])]) }
+            if requests.count == 2 {
+                guard let id = session.runningBlockID else { throw AIError.message("Native fixture has no running command") }
+                return try toolReply(calls: [("ask_user", question("Optional first answer", options: [("Old answer", "stale-native-answer")], custom: true, commandID: id.uuidString))])
+            }
+            return .init(text: "Native keyboard completed the command")
+        }
+        defer { assistant.cancel(session: session) }
+        assistant.ask("Use native keyboard for this command", session: session)
+        try await wait { assistant.userQuestions.values.contains { $0.state == .pending } && session.terminal.keyboardFocusAllowed }
+        let pending = assistant.userQuestions.values.first { $0.state == .pending }!
+        let id = pending.spec.commandID!
+        check(session.nativeInputRevision == 0 && !session.nativeControlActive,
+              "\(shell) command payload and startup replies do not activate the native-input lease")
+        check(host.window.makeFirstResponder(session.terminal), "\(shell) an AI-owned y/n-style command accepts a native first responder")
+        NativeTerminalTestDriver.insert(firstValue, into: session.terminal)
+        try await wait { !assistant.canAnswerQuestion(pending.id) }
+        check(session.nativeInputRevision > 0 && session.nativeControlActive && assistant.userQuestions[pending.id]?.state == .answered,
+              "\(shell) real AppKit insertText activates native control and retires the pending card on its first bytes")
+        check(!assistant.answerQuestion(pending.id, optionID: "option-1") && assistant.userQuestions[pending.id]?.response != firstValue,
+              "\(shell) retired cards cannot duplicate native input or retain its private text")
+        try await Task.sleep(nanoseconds: 1_250_000_000)
+        check(session.running && requests.count == 2, "\(shell) first native input pauses execution deadlines and AI transport while the person is still typing")
+        NativeTerminalTestDriver.enter(session.terminal)
+        try await wait { session.liveOutput.contains("native-second:") }
+        NativeTerminalTestDriver.insert(secondValue, into: session.terminal); NativeTerminalTestDriver.enter(session.terminal)
+        try await wait { !session.running && !assistant.thinking.contains(session.id) }
+        check(session.blocks.first { $0.id == id }?.exitCode == 0 && requests.count == 3,
+              "\(shell) native keyboard answers both prompts in the original AI-owned command and resumes AI once after exit")
+        check(assistant.userQuestions.count == 1 && requests.allSatisfy { !history($0).contains(firstValue) && !history($0).contains(secondValue) },
+              "\(shell) native input creates no replacement card and its private bytes are absent from model history")
+    }
+
+    private static func lateQuestionAfterNativeInput(check: (Bool, String) -> Void) async throws {
+        let suite = "EchoTerm.LateNativeQuestion.\(UUID().uuidString)", defaults: UserDefaults
+        defaults = UserDefaults(suiteName: suite)!; defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults), providers = providerStore(defaults)
+        preferences.quickIntents = false; preferences.assistantMode = .autonomous; preferences.commandTimeout = 1
+        let session = TerminalSession(directory: "/tmp", loadShellConfig: false, shellPath: "/bin/zsh")
+        session.usesBlockEditor = true; session.start(); defer { session.close() }
+        let host = NativeTerminalTestHost(session: session, preferences: preferences); defer { host.close() }
+        try await wait { session.ready }
+        var requests: [AIRequestContext] = [], captured = false, releaseReply = false, returned = false
+        let command = "stty -echo; printf 'late-first: '; IFS= read -r late_first; printf '\\nlate-second: '; IFS= read -r late_second; stty echo; printf '\\nLATE-DONE\\n'"
+        let assistant = AssistantStore(providers: providers, preferences: preferences) { request, _ in
+            requests.append(request)
+            if requests.count == 1 { return try toolReply(calls: [("execute_command", ["command": command, "explanation": "Stale in-flight question fixture", "risk": "read", "interactive": true])]) }
+            if requests.count == 2 {
+                let id = session.runningBlockID!; captured = true
+                while !releaseReply { try await Task.sleep(nanoseconds: 20_000_000) }
+                returned = true
+                return try toolReply(calls: [("ask_user", question("An outdated question for the same command", options: [("Outdated", "wrong-answer")], custom: false, commandID: id.uuidString))])
+            }
+            return .init(text: "Late question suppressed")
+        }
+        defer { assistant.cancel(session: session) }
+        assistant.ask("Native input races a slow model", session: session)
+        try await wait { captured && session.terminal.keyboardFocusAllowed }
+        NativeTerminalTestDriver.insert("late-private-first", into: session.terminal); NativeTerminalTestDriver.enter(session.terminal)
+        try await wait { session.liveOutput.contains("late-second:") }
+        releaseReply = true; try await wait { returned }
+        try await Task.sleep(nanoseconds: 1_250_000_000)
+        check(session.running && session.nativeControlActive && requests.count == 2 && assistant.userQuestions.values.allSatisfy { $0.state != .pending },
+              "A late ask_user for the same command cannot resurrect a card, resume AI polling or time out native interaction")
+        NativeTerminalTestDriver.insert("late-private-second", into: session.terminal); NativeTerminalTestDriver.enter(session.terminal)
+        try await wait { !session.running && !assistant.thinking.contains(session.id) }
+        check(requests.count == 3 && requests.allSatisfy { !history($0).contains("late-private-first") && !history($0).contains("late-private-second") },
+              "A stale model question resumes only after original command completion without replaying native answer bytes")
+    }
+
+    private static func nativeAndPresetByteBoundaries(check: (Bool, String) -> Void) async throws {
+        let suite = "EchoTerm.NativeByteBoundaries.\(UUID().uuidString)", defaults: UserDefaults
+        defaults = UserDefaults(suiteName: suite)!; defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults), providers = providerStore(defaults)
+        preferences.quickIntents = false; preferences.assistantMode = .autonomous; preferences.commandTimeout = 1
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("EchoTerm-native-bytes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
+        let captured = root.appendingPathComponent("keys.bin"), response = root.appendingPathComponent("device-response.bin")
+        let expected = Array("\u{1b}[A\u{1b}[B\u{1b}[D\u{1b}[C\t\u{1b}\r\u{3}\u{3}".utf8)
+        let script = """
+        import os,select,sys,termios,tty
+        old=termios.tcgetattr(0)
+        try:
+            tty.setraw(0)
+            os.write(1,b'\\x1b[?1l\\x1b[5n')
+            reply=b''
+            while len(reply)<4: reply+=os.read(0,4-len(reply))
+            open(\(String(reflecting: response.path)),'wb').write(reply)
+            os.write(1,b'RAW-READY')
+            data=b''
+            while len(data)<\(expected.count): data+=os.read(0,\(expected.count)-len(data))
+            if select.select([0],[],[],0.15)[0]: data+=os.read(0,4096)
+            open(\(String(reflecting: captured.path)),'wb').write(data)
+        finally:
+            termios.tcsetattr(0,termios.TCSANOW,old)
+        print('RAW-DONE',flush=True)
+        """
+        let session = TerminalSession(directory: root.path, loadShellConfig: false, shellPath: "/bin/zsh")
+        session.usesBlockEditor = true; session.start(); defer { session.close() }
+        let host = NativeTerminalTestHost(session: session, preferences: preferences); defer { host.close() }
+        try await wait { session.ready }
+        var requests: [AIRequestContext] = []
+        let assistant = AssistantStore(providers: providers, preferences: preferences) { request, _ in
+            requests.append(request)
+            if requests.count == 1 { return try toolReply(calls: [("execute_command", ["command": "/usr/bin/python3 -u -c " + ShellWords.quote(script), "explanation": "Capture exact native and preset bytes", "risk": "read", "interactive": true])]) }
+            return .init(text: "Exact key bytes completed")
+        }
+        defer { assistant.cancel(session: session) }
+        assistant.ask("Capture native keys and optional presets", session: session)
+        try await wait { session.liveOutput.contains("RAW-READY") && FileManager.default.fileExists(atPath: response.path) }
+        let blockID = session.runningBlockID!
+        check((try? Data(contentsOf: response)) == Data("\u{1b}[0n".utf8) && session.nativeInputRevision == 0 && !session.nativeControlActive,
+              "Automatic terminal device replies are not mistaken for native keyboard input or deadline interaction")
+        check(host.window.makeFirstResponder(session.terminal) && host.window.isKeyWindow,
+              "The AppKit component dispatcher has a terminal first responder under explicit simulated key-window eligibility")
+        let revisionBeforeIneligibleWindow = session.nativeInputRevision
+        host.window.simulatedKeyEligibility = false
+        NativeTerminalTestDriver.insert("must-not-reach-raw-reader", into: session.terminal)
+        let blockedWindowKey = NativeTerminalTestDriver.key("\u{f701}", code: 125, modifiers: [.function, .numericPad], into: session.terminal)
+        check(blockedWindowKey && session.nativeInputRevision == revisionBeforeIneligibleWindow,
+              "A non-key component window suppresses text and arrow bytes without weakening the production eligibility guard")
+        host.window.simulatedKeyEligibility = true
+        let revisionBeforeShortcuts = session.nativeInputRevision
+        let menu = NativeTerminalTestMenu(); defer { menu.restore() }
+        let commandPeriod = NativeTerminalTestDriver.key(".", code: 47, modifiers: .command, into: session.terminal)
+        let commandComma = NativeTerminalTestDriver.key(",", code: 43, modifiers: .command, into: session.terminal)
+        check(commandPeriod && commandComma && menu.periodInvocations == 1 && menu.commaInvocations == 1
+              && session.nativeInputRevision == revisionBeforeShortcuts,
+              "Recognized Command-period and Command-comma invoke isolated menu actions exactly once without native stdin")
+        session.terminal.nativeInputAllowed = false
+        let blockedCommandControlC = NativeTerminalTestDriver.key("\u{3}", code: 8, modifiers: [.command, .control], unmodified: "c", into: session.terminal)
+        check(blockedCommandControlC && session.nativeInputRevision == revisionBeforeShortcuts,
+              "An unknown Command-Control-C cannot bypass a disabled native-input gate through inherited SwiftTerm fallback")
+        session.terminal.nativeInputAllowed = true
+        host.window.makeFirstResponder(host.field)
+        let wrongResponder = NativeTerminalTestDriver.key("\u{f701}", code: 125, modifiers: [.function, .numericPad], into: session.terminal)
+        check(!wrongResponder && session.nativeInputRevision == revisionBeforeShortcuts,
+              "A window-scoped terminal dispatcher cannot capture keys intended for another input's field editor")
+        host.window.makeFirstResponder(session.terminal)
+        check(!assistant.sendCommandKey(.enter, session: session, expectedBlockID: UUID()), "Optional raw presets reject a different command UUID before writing bytes")
+        check(assistant.sendCommandKey(.up, session: session, expectedBlockID: blockID), "An explicitly clicked Up preset targets the original command")
+        NativeTerminalTestDriver.down(session.terminal)
+        check(assistant.sendCommandKey(.left, session: session, expectedBlockID: blockID)
+              && assistant.sendCommandKey(.right, session: session, expectedBlockID: blockID)
+              && assistant.sendCommandKey(.tab, session: session, expectedBlockID: blockID)
+              && assistant.sendCommandKey(.escape, session: session, expectedBlockID: blockID)
+              && assistant.sendCommandKey(.enter, session: session, expectedBlockID: blockID), "Explicit raw presets send arrows, Tab, Escape and Return through the bound original command")
+        NativeTerminalTestDriver.controlC(session.terminal)
+        let revisionBeforeUnknownShortcut = session.nativeInputRevision
+        let unknownCommandControlC = NativeTerminalTestDriver.key("\u{3}", code: 8, modifiers: [.command, .control], unmodified: "c", into: session.terminal)
+        check(unknownCommandControlC && session.nativeInputRevision > revisionBeforeUnknownShortcut,
+              "An eligible unknown Command-Control-C fallback retains native-input provenance")
+        try await wait { !session.running && !assistant.thinking.contains(session.id) && FileManager.default.fileExists(atPath: captured.path) }
+        check((try? Data(contentsOf: captured)) == Data(expected), "AppKit arrows, native Ctrl-C and unknown Command-Control-C preserve exactly one payload each with no extra Return")
+        check(session.blocks.first { $0.id == blockID }?.exitCode == 0 && requests.count == 2,
+              "Native Ctrl-C is forwarded once to a raw-mode program without separately cancelling its AI task")
+        check(!assistant.sendCommandKey(.enter, session: session, expectedBlockID: blockID), "Raw presets reject a command after it has exited")
+    }
+
+    private static func tuiEntryPausesDeadline(check: (Bool, String) -> Void) async throws {
+        let suite = "EchoTerm.NativeTUIDeadline.\(UUID().uuidString)", defaults: UserDefaults
+        defaults = UserDefaults(suiteName: suite)!; defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults), providers = providerStore(defaults)
+        preferences.quickIntents = false; preferences.assistantMode = .autonomous; preferences.commandTimeout = 1
+        let session = TerminalSession(directory: "/tmp", loadShellConfig: false, shellPath: "/bin/zsh")
+        session.usesBlockEditor = true; session.start(); defer { session.close() }
+        let host = NativeTerminalTestHost(session: session, preferences: preferences); defer { host.close() }
+        try await wait { session.ready }
+        let script = """
+        import os,termios,tty
+        old=termios.tcgetattr(0)
+        try:
+            tty.setraw(0)
+            os.write(1,b'\\x1b[?1049hTUI-LEASE-READY')
+            os.read(0,1)
+        finally:
+            os.write(1,b'\\x1b[?1049l')
+            termios.tcsetattr(0,termios.TCSANOW,old)
+        print('TUI-LEASE-DONE',flush=True)
+        """
+        var requests = 0
+        let assistant = AssistantStore(providers: providers, preferences: preferences) { _, _ in
+            requests += 1
+            if requests == 1 { return try toolReply(calls: [("execute_command", ["command": "/usr/bin/python3 -u -c " + ShellWords.quote(script), "explanation": "Alternate-screen pause before any typing", "risk": "read", "interactive": true])]) }
+            return .init(text: "TUI completed")
+        }
+        defer { assistant.cancel(session: session) }
+        assistant.ask("Use the TUI without racing its command deadline", session: session)
+        try await wait { session.alternateScreen && session.terminal.keyboardFocusAllowed }
+        try await Task.sleep(nanoseconds: 1_250_000_000)
+        check(session.running && session.nativeInputRevision == 0 && requests == 1,
+              "Entering an alternate-screen TUI pauses the execution deadline and AI polling before the first native keystroke")
+        NativeTerminalTestDriver.insert("x", into: session.terminal)
+        try await wait { !session.running && !assistant.thinking.contains(session.id) }
+        check(requests == 2 && session.blocks.last(where: { !$0.isAI })?.exitCode == 0,
+              "The TUI accepts native raw input without requiring Return and AI resumes only after its actual exit")
     }
 
     private static func timeoutDuringStalledTransport(check: (Bool, String) -> Void) async throws {

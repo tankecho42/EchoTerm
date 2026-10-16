@@ -86,6 +86,7 @@ struct AssistantBubble: View {
             Divider().opacity(0.35)
             HStack(alignment: .bottom, spacing: 9) {
                 TextField("问一句…", text: draft, axis: .vertical).textFieldStyle(.plain).font(.system(size: 12)).lineLimit(1...4).focused($inputFocused).onSubmit(send)
+                    .disabled(!assistant.canStartBlock(in: session))
                 Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 11, weight: .medium)).frame(width: 24, height: 24).background(theme.accent.opacity(0.12)).clipShape(Circle()) }.buttonStyle(.plain).foregroundStyle(theme.accent).disabled(!assistant.canStartBlock(in: session) || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             HStack(spacing: 5) {
@@ -96,12 +97,17 @@ struct AssistantBubble: View {
         }.padding(15).frame(width: width).background(theme.base.opacity(0.98)).clipShape(RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(theme.text.opacity(0.12)))
             .shadow(color: .black.opacity(0.28), radius: 18, y: 7)
-            .onChange(of: workspace.assistantFocusRequest) { _, _ in inputFocused = true }
+            .onChange(of: workspace.assistantFocusRequest) { _, _ in
+                if !session.running { inputFocused = true }
+                else { releaseCommandFocus() }
+            }
             .onChange(of: inputFocused) { _, focused in workspace.assistantWantsFocus = focused }
+            .onChange(of: session.running) { _, running in if running { releaseCommandFocus() } }
             .task {
-                if workspace.assistantWantsFocus {
+                if session.running { releaseCommandFocus() }
+                else if workspace.assistantWantsFocus {
                     try? await Task.sleep(nanoseconds: 80_000_000)
-                    if !Task.isCancelled { inputFocused = true }
+                    if !Task.isCancelled && !session.running { inputFocused = true }
                 }
             }
             .onExitCommand { inputFocused = false; workspace.assistantWantsFocus = false; workspace.activeSession?.focus() }
@@ -120,5 +126,11 @@ struct AssistantBubble: View {
     private func send() {
         guard !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if assistant.ask(contextualQuestion(draft.wrappedValue), session: session) { draft.wrappedValue = "" }
+    }
+    private func releaseCommandFocus() {
+        inputFocused = false; workspace.assistantWantsFocus = false
+        if workspace.activeSession?.id == session.id && !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil {
+            session.focus()
+        }
     }
 }

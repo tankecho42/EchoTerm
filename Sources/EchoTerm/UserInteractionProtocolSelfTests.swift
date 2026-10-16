@@ -78,6 +78,9 @@ import Foundation
             let initialInstructions = (initial["instructions"] ?? initial["system"] ?? (initial["messages"] as? [[String: Any]])?.first?["content"]) as? String ?? ""
             check(Set(toolNames(initial, api: api)) == [AIClient.executeTool, InteractionTools.ask]
                   && initialInstructions.contains("execute_command(interactive: true)") && !initialInstructions.contains("仅使用 interactive: false"), "\(api.rawValue) the first autonomous command may be interactive before a wait handle exists")
+            check(initialInstructions.contains("默认使用原生终端键盘") && initialInstructions.contains("不要自动打开辅助输入面板")
+                  && initialInstructions.contains("native_input") && initialInstructions.contains("alternate_screen"),
+                  "\(api.rawValue) interaction instructions keep native typing and TUI control primary while auxiliary questions remain optional")
             let full = try requestBody(config, mode: .autonomous, questions: true, controls: true)
             check(Set(toolNames(full, api: api)) == [AIClient.executeTool, InteractionTools.ask, InteractionTools.wait], "\(api.rawValue) autonomous conversation advertises explicit execution, questions and command waiting")
             check(toolSchemas(full, api: api).allSatisfy(strictObjectSchema), "\(api.rawValue) tool schemas require every property and reject additional fields")

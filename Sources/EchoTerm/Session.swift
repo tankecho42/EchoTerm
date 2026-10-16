@@ -30,6 +30,9 @@ struct BlockReveal: Equatable {
     let started = ProcessInfo.processInfo.systemUptime
 }
 
+/// UI-only named keys; model tools never accept arbitrary terminal bytes.
+enum TerminalInputKey { case up, down, left, right, tab, escape, enter, controlC }
+
 final class TerminalSession: ObservableObject, Identifiable {
     let id = UUID()
     @Published var blocks: [CommandBlock] = []
@@ -69,6 +72,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     @Published var liveOutput = ""
     @Published var interactiveView = false
     @Published var alternateScreen = false
+    @Published private(set) var nativeInputRevision = 0
+    @Published private(set) var nativeControlActive = false
     var presentsInteractiveTerminal: Bool { running && (interactiveView || alternateScreen) }
     var usesBlockEditor = false
     @Published var agentOwner: UUID?
@@ -83,6 +88,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     var onComplete: ((CommandBlock) -> Void)?
     var onExecute: ((String) -> Void)?
     var onActivity: (() -> Void)?
+    var onNativeCommandInput: ((UUID) -> Void)?
     private var bootstrap: URL?
     private var started = false
     private let loadShellConfig: Bool
@@ -101,6 +107,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         self.loadShellConfig = loadShellConfig
         self.environmentOverrides = environmentOverrides
         terminal.onEvent = { [weak self] event in self?.receive(event) }
+        terminal.onNativeInput = { [weak self] in self?.recordNativeInput() }
         terminal.onResize = { [weak self] columns, rows in
             self?.recording?.resize(cols: columns, rows: rows)
         }
@@ -157,7 +164,8 @@ final class TerminalSession: ObservableObject, Identifiable {
         runningBlockID = blocks.last?.id
         if owner != nil { agentBlockID = blocks.last?.id }
         trimBlocks()
-        running = true; capturing = true; draft = ""; historyIndex = nil; liveOutput = ""; interactiveView = false
+        running = true; capturing = true; draft = ""; historyIndex = nil; liveOutput = ""; interactiveView = true
+        nativeInputRevision = 0; nativeControlActive = false
         recording = makeRecording()
         onExecute?(command)
         onActivity?()
@@ -202,6 +210,29 @@ final class TerminalSession: ObservableObject, Identifiable {
               !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || $0.value == 0x2028 || $0.value == 0x2029 }) else { return false }
         terminal.send(txt: text + "\r")
         return true
+    }
+    @discardableResult func sendKey(_ key: TerminalInputKey, expectedBlockID: UUID) -> Bool {
+        guard running, !exited, runningBlockID == expectedBlockID else { return false }
+        let application = terminal.getTerminal().applicationCursor
+        let text: String
+        switch key {
+        case .up: text = application ? "\u{1b}OA" : "\u{1b}[A"
+        case .down: text = application ? "\u{1b}OB" : "\u{1b}[B"
+        case .right: text = application ? "\u{1b}OC" : "\u{1b}[C"
+        case .left: text = application ? "\u{1b}OD" : "\u{1b}[D"
+        case .tab: text = "\t"
+        case .escape: text = "\u{1b}"
+        case .enter: text = "\r"
+        case .controlC: text = "\u{3}"
+        }
+        recordNativeInput()
+        terminal.send(txt: text)
+        return true
+    }
+    private func recordNativeInput() {
+        guard running, !exited, let blockID = runningBlockID else { return }
+        nativeInputRevision += 1; nativeControlActive = true
+        onNativeCommandInput?(blockID)
     }
     func interrupt() { terminal.send(txt: "\u{03}") }
     func close() {
@@ -272,7 +303,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             lastCompleted = completed
             running = false; capturing = false; recording = nil
             runningBlockID = nil
-            liveOutput = ""; alternateScreen = false; interactiveView = false
+            liveOutput = ""; alternateScreen = false; interactiveView = false; nativeControlActive = false
             if selectedBlockID == blocks[index].id && readingAnchorID == nil { selectedBlockID = nil }
             focusRequest = UUID()
             onComplete?(completed)

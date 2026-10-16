@@ -1,3 +1,17 @@
+# 0.11.1 verification
+
+2026-10-16, Apple Silicon. Local deterministic API/PTY fixtures; no live paid-model calls.
+
+- `./scripts/test.sh --network`: **512 / 512 passed**, including native input on AI-owned Zsh/Bash commands, real AppKit text/key dispatch, Vim arrows and Unicode edits, input provenance, stale questions, cancellation, exact preset bytes and single Ctrl-C delivery. Native interaction/TUI pauses command deadlines; untouched quiet commands retain their timeout watchdog.
+- CLI component tests use a DEBUG-only NSWindow subclass with explicitly simulated `isKeyWindow` eligibility. They exercise inherited AppKit key handling and the production input guards, including rejection when ineligible. Actual OS focus and physical-key delivery were checked separately through CUA in an isolated QA application with its own bundle identity and defaults. All **39 Mach-O code/data sections** of the final QA copy match the optimized Release; QA signing metadata differs.
+- Final Release QA: physical `y` + Return followed by a Unicode paste of `原生完成` completed the original command with **exit 0**, output `y|原生完成`, after **9.5 seconds** with a **3-second command deadline**. The next command editor received focus automatically without another click.
+- Final Release QA: all four physical arrow directions, then Down and Return, controlled the alternate-screen fixture and produced `1,0`, **exit 0**, after **112.8 seconds**. Native TUI interaction remained available throughout the human wait.
+- Final Release QA at **220 px pane width**: native input was the default and the helper remained closed. Explicitly opening it and clicking the Down preset moved to row 1; the Return preset completed that same command with **exit 0** after **23.6 seconds**. Focus returned automatically to the next editor.
+- An earlier candidate, sharing the interaction runtime before the final post-completion editor-focus fix, additionally passed settings-modal and background-tab input isolation, disabled assistant-bubble input during a running TUI, and helper draft preservation across close/reopen. Submitting its Unicode helper text completed the original command with `y|辅助备注`, **exit 0**. These candidate checks are recorded separately from the final-copy checks above.
+- Final package: **0.11.1 / build 23**, arm64, macOS 14+, **25 independent static checks passed**. The 5,467,956-byte ZIP passed extraction, strict signing, exact file/resource inventory and three dependency-license checks. SHA-256: `bcfeba048164e83bf52e12a1d25bfaf959703f6858d007a52af641b7ee32e4b1`. Signing is ad-hoc; Apple notarization and downloaded Gatekeeper acceptance are outside this verification.
+
+---
+
 # 0.11.0 verification
 
 2026-10-15, Apple Silicon, Swift 6.3.2. Local deterministic API/PTY fixtures; no paid model calls.

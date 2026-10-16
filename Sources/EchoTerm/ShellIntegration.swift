@@ -58,9 +58,57 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
     var onExit: ((Int32?) -> Void)?
     var onFocus: (() -> Void)?
     var onInput: ((ArraySlice<UInt8>) -> Void)?
+    var onNativeInput: (() -> Void)?
+    var onNativeFocusRequested: (() -> Void)?
     var onResize: ((Int, Int) -> Void)?
     var keyboardFocusAllowed = false
+    var nativeInputAllowed = false
     private var focusPending = false
+    private var nativeInputDepth = 0
+    private var protocolInputDepth = 0
+    private var eventMonitor: Any?
+    private func withNativeInput(_ operation: () -> Void) {
+        guard nativeInputAllowed, let window, window.isKeyWindow, window.firstResponder === self else { return }
+        nativeInputDepth += 1
+        defer { nativeInputDepth -= 1 }
+        operation()
+    }
+    /// The local event monitor and GUI tests share this path. Returning true
+    /// means AppKit must not deliver the same key a second time.
+    @discardableResult func dispatchNativeKeyDown(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, let window, event.window === window,
+              window.firstResponder === self else { return false }
+        // Resolve registered app shortcuts exactly once. Unmatched Command
+        // combinations still need the same native-input gate and provenance.
+        if event.modifierFlags.contains(.command), NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
+        guard nativeInputAllowed, window.isKeyWindow else { return true }
+        withNativeInput { self.keyDown(with: event) }
+        return true
+    }
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        withNativeInput { super.insertText(string, replacementRange: replacementRange) }
+    }
+    override func paste(_ sender: Any) { withNativeInput { super.paste(sender) } }
+    private func installEventMonitor() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+            guard let self, let window = self.window, event.window === window else { return event }
+            if event.type == .keyDown { return self.dispatchNativeKeyDown(event) ? nil : event }
+            if let content = window.contentView {
+                // hitTest takes its point in the receiver's superview coordinates.
+                // Checking the topmost target also respects SwiftUI overlays.
+                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+                if let hit = content.hitTest(point), hit === self || hit.isDescendant(of: self) {
+                    self.onNativeFocusRequested?()
+                }
+            }
+            return event
+        }
+    }
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        protocolInputDepth += 1
+        defer { protocolInputDepth -= 1 }
+        super.send(source: source, data: data)
+    }
     func requestKeyboardFocus() {
         guard keyboardFocusAllowed, !focusPending else { return }
         focusPending = true
@@ -72,15 +120,21 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
             window.makeFirstResponder(self)
         }
     }
-    override init(frame: CGRect) { super.init(frame: frame); connect() }
-    required init?(coder: NSCoder) { super.init(coder: coder); connect() }
+    override init(frame: CGRect) { super.init(frame: frame); connect(); installEventMonitor() }
+    required init?(coder: NSCoder) { super.init(coder: coder); connect(); installEventMonitor() }
+    deinit { if let eventMonitor { NSEvent.removeMonitor(eventMonitor) } }
     func dataReceived(slice: ArraySlice<UInt8>) {
         for event in streamParser.feed(Array(slice)) {
             if case .output(let bytes) = event { feed(byteArray: bytes[...]) }
             onEvent?(event)
         }
     }
-    func send(source: TerminalView, data: ArraySlice<UInt8>) { if window?.firstResponder === self { onFocus?() }; onInput?(data); process.send(data: data) }
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if nativeInputDepth > 0 && !nativeInputAllowed { return }
+        if window?.firstResponder === self { onFocus?() }
+        if nativeInputDepth > 0, protocolInputDepth == 0, !data.isEmpty { onNativeInput?() }
+        onInput?(data); process.send(data: data)
+    }
     func getWindowSize() -> winsize {
         winsize(ws_row: UInt16(max(1, getTerminal().rows)), ws_col: UInt16(max(1, getTerminal().cols)), ws_xpixel: UInt16(max(0, frame.width)), ws_ypixel: UInt16(max(0, frame.height)))
     }
