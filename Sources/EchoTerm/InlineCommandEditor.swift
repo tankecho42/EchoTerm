@@ -12,6 +12,8 @@ struct InlineCommandEditor: NSViewRepresentable {
     var focusRequest: UUID
     var enabled = true
     var automaticallyFocus = true
+    var explicitFocus = false
+    var focusOwnerID: UUID? = nil
     var completion: String? = nil
     var commandAssessment: CommandAssessment? = nil
     var onCycleCompletion: ((Int) -> String?)? = nil
@@ -44,6 +46,9 @@ struct InlineCommandEditor: NSViewRepresentable {
         view.minSize = .zero
         view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         view.delegate = context.coordinator
+        view.onFocusEligibilityChanged = { [weak coordinator = context.coordinator, weak view] in
+            if let view { coordinator?.requestFocus(view) }
+        }
         view.setAccessibilityLabel("终端命令输入")
         scroll.documentView = view
         return scroll
@@ -63,7 +68,10 @@ struct InlineCommandEditor: NSViewRepresentable {
         let canFocus = automaticallyFocus && canEdit
         if view.isEditable != canEdit { view.isEditable = canEdit }
         view.allowsAutomaticFocus = canFocus
-        if !canFocus { context.coordinator.lastFocus = focusRequest; view.wantsInitialFocus = false }
+        if !canFocus, let window = view.window, window.firstResponder === view {
+            window.makeFirstResponder(nil)
+        }
+        view.focusOwnerID = focusOwnerID
         if styleChanged { view.typingAttributes = [.font: font, .foregroundColor: color] }
         if view.string != text && !view.hasMarkedText() {
             view.string = text
@@ -83,23 +91,43 @@ struct InlineCommandEditor: NSViewRepresentable {
         }
         view.needsDisplay = true
         view.setAccessibilityHelp(completion.map { "补全：\($0)。Tab 接受，上下切换。" } ?? "Return 提交；Command Return 强制执行；Option Return 询问 AI。")
-        if canFocus && context.coordinator.lastFocus != focusRequest {
-            context.coordinator.lastFocus = focusRequest
-            view.wantsInitialFocus = true
-            DispatchQueue.main.async { [weak view] in
-                guard let view, view.isEditable, view.allowsAutomaticFocus, let window = view.window else { return }
-                window.makeFirstResponder(view); view.wantsInitialFocus = false
-            }
-        }
+        context.coordinator.requestFocus(view)
+    }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let view = scroll.documentView as? CommandTextView else { return }
+        view.allowsAutomaticFocus = false
+        view.onFocusEligibilityChanged = nil
+        if let window = view.window, window.firstResponder === view { window.makeFirstResponder(nil) }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: InlineCommandEditor
         var lastFocus: UUID?
+        private var focusQueued = false
         var styledText: String?
         var styledFont: NSFont?
         var styledColor: NSColor?
         var styledAssessment: CommandAssessment?
         init(_ parent: InlineCommandEditor) { self.parent = parent }
+        func requestFocus(_ view: CommandTextView) {
+            guard view.isEditable, view.allowsAutomaticFocus, lastFocus != parent.focusRequest,
+                  !focusQueued else { return }
+            focusQueued = true
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self else { return }
+                self.focusQueued = false
+                guard let view, view.isEditable, view.allowsAutomaticFocus,
+                      self.lastFocus != self.parent.focusRequest, let window = view.window,
+                      window.isKeyWindow,
+                      CommandTextView.canRequestFocus(in: window, ownerID: self.parent.focusOwnerID,
+                                                      explicit: self.parent.explicitFocus) else { return }
+                if window.firstResponder === view {
+                    self.lastFocus = self.parent.focusRequest
+                    view.onFocus?()
+                } else if window.makeFirstResponder(view), window.firstResponder === view {
+                    self.lastFocus = self.parent.focusRequest
+                }
+            }
+        }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSTextView else { return }
             styledText = nil
@@ -125,7 +153,9 @@ final class CommandTextView: NSTextView {
     var onHistory: ((Int) -> Void)?
     var onFocus: (() -> Void)?
     var onCancel: (() -> Void)?
-    var wantsInitialFocus = false
+    var onFocusEligibilityChanged: (() -> Void)?
+    var focusOwnerID: UUID?
+    private var keyWindowObserver: NSObjectProtocol?
     var allowsAutomaticFocus = true
     var completion: String?
     var onCycleCompletion: ((Int) -> String?)?
@@ -145,16 +175,36 @@ final class CommandTextView: NSTextView {
         (suffix as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.5)])
         NSGraphicsContext.restoreGraphicsState()
     }
+    /// Automatic completion focus never displaces another editable field. An
+    /// explicit block click may transfer ownership, without altering its draft.
+    static func canRequestFocus(in window: NSWindow, ownerID: UUID?, explicit: Bool) -> Bool {
+        if explicit { return true }
+        if let editor = window.firstResponder as? CommandTextView {
+            return editor.focusOwnerID == ownerID
+        }
+        if let text = window.firstResponder as? NSTextView, text.isEditable { return false }
+        if let field = window.firstResponder as? NSTextField, field.isEditable { return false }
+        return true
+    }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if wantsInitialFocus && isEditable && allowsAutomaticFocus { DispatchQueue.main.async { [weak self] in guard let self, self.allowsAutomaticFocus else { return }; self.window?.makeFirstResponder(self); self.wantsInitialFocus = false } }
+        if let keyWindowObserver { NotificationCenter.default.removeObserver(keyWindowObserver); self.keyWindowObserver = nil }
+        if let window {
+            keyWindowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                                                       object: window, queue: .main) { [weak self] _ in
+                self?.onFocusEligibilityChanged?()
+            }
+            onFocusEligibilityChanged?()
+        }
     }
+    deinit { if let keyWindowObserver { NotificationCenter.default.removeObserver(keyWindowObserver) } }
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result { onFocus?() }
         return result
     }
     override func keyDown(with event: NSEvent) {
+        guard isEditable else { return }
         if !hasMarkedText() {
             if event.keyCode == 36 || event.keyCode == 76 {
                 if event.modifierFlags.contains(.command), let onForcedSubmit { onForcedSubmit(.shell) }

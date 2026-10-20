@@ -108,6 +108,10 @@ final class TerminalSession: ObservableObject, Identifiable {
         self.environmentOverrides = environmentOverrides
         terminal.onEvent = { [weak self] event in self?.receive(event) }
         terminal.onNativeInput = { [weak self] in self?.recordNativeInput() }
+        terminal.nativeInputIsPresented = { [weak self] in
+            guard let self else { return false }
+            return !self.usesBlockEditor || self.presentsInteractiveTerminal
+        }
         terminal.onResize = { [weak self] columns, rows in
             self?.recording?.resize(cols: columns, rows: rows)
         }
@@ -166,6 +170,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         trimBlocks()
         running = true; capturing = true; draft = ""; historyIndex = nil; liveOutput = ""; interactiveView = true
         nativeInputRevision = 0; nativeControlActive = false
+        terminal.resumeNormalOutputFollowing()
         recording = makeRecording()
         onExecute?(command)
         onActivity?()
@@ -233,6 +238,18 @@ final class TerminalSession: ObservableObject, Identifiable {
         guard running, !exited, let blockID = runningBlockID else { return }
         nativeInputRevision += 1; nativeControlActive = true
         onNativeCommandInput?(blockID)
+    }
+    static func isNativeInterrupt(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.modifierFlags.contains(.control),
+              !event.modifierFlags.contains(.option) else { return false }
+        return event.characters == "\u{03}" || event.charactersIgnoringModifiers == "\u{03}"
+            || event.charactersIgnoringModifiers == "c" || event.charactersIgnoringModifiers == "C"
+    }
+    @discardableResult func sendNativeInterrupt(expectedBlockID: UUID) -> Bool {
+        guard running, !exited, runningBlockID == expectedBlockID else { return false }
+        recordNativeInput()
+        terminal.send(txt: "\u{03}")
+        return true
     }
     func interrupt() { terminal.send(txt: "\u{03}") }
     func close() {
@@ -390,12 +407,18 @@ struct WorkspaceTab: Identifiable {
 }
 
 final class Workspace: ObservableObject {
-    @Published var tabs: [WorkspaceTab] = []
+    @Published var tabs: [WorkspaceTab] = [] {
+        didSet {
+            for session in indexedSessions { bindNativeInputEligibility(session) }
+        }
+    }
     @Published var selectedTabID: UUID? { didSet { if oldValue != selectedTabID { assistantWantsFocus = false } } }
     @Published var assistantVisible = false
     @Published var assistantSessionID: UUID?
     @Published var assistantFocusRequest = UUID()
     @Published var assistantWantsFocus = false
+    @Published var currentInputFocusSessionID: UUID?
+    @Published var currentInputFocusRequest = UUID()
     private var assistantWasMinimized = false
     var assistantSession: TerminalSession? { tabs.flatMap { $0.root.sessions }.first { $0.id == assistantSessionID } }
     func presentAssistant(for id: UUID, automatic: Bool = false) {
@@ -416,6 +439,20 @@ final class Workspace: ObservableObject {
         if assistantVisible && (session == nil || session?.id == assistantSessionID) { minimizeAssistant() }
         else if let target = session ?? activeSession { presentAssistant(for: target.id) }
     }
+    /// An explicit transcript click transfers focus without reusing its command
+    /// or replacing the current draft. Modal dialogs retain their input owner.
+    @discardableResult func focusCurrentInput(sessionID: UUID) -> Bool {
+        guard !inputBlockedByModal,
+              let session = indexedSessions.first(where: { $0.id == sessionID }) else { return false }
+        revealSession(sessionID)
+        assistantWantsFocus = false
+        session.resumeInput(); session.selectedBlockID = nil
+        if session.running { session.interactiveView = true }
+        currentInputFocusSessionID = sessionID
+        currentInputFocusRequest = UUID()
+        session.focus()
+        return true
+    }
     var indexedSessions: [TerminalSession] { tabs.flatMap { $0.root.sessions } }
     func sessionIndex(_ id: UUID) -> Int? { indexedSessions.firstIndex { $0.id == id }.map { $0 + 1 } }
     @discardableResult func revealBlock(sessionID: UUID, blockID: UUID) -> Bool {
@@ -433,8 +470,14 @@ final class Workspace: ObservableObject {
     var onTabActivity: ((UUID) -> Void)?
     var onTabClosed: ((UUID) -> Void)?
     @Published var showSettings = false
+    @Published var editingTab: WorkspaceTab?
     @Published var pendingClose: [UUID]?
     @Published var pendingQuit = false
+    var inputBlockedByModal: Bool { showSettings || editingTab != nil || pendingClose != nil || pendingQuit }
+    func allowsNativeInput(sessionID: UUID) -> Bool {
+        guard let session = activeSession, session.id == sessionID else { return false }
+        return !inputBlockedByModal && !assistantWantsFocus && (!session.showSearch || session.presentsInteractiveTerminal)
+    }
     var configureSession: ((TerminalSession) -> Void)?
     var activeTab: WorkspaceTab? { tabs.first { $0.id == selectedTabID } }
     var activeSession: TerminalSession? { activeTab?.root.sessions.first { $0.id == activeTab?.activeSessionID } }
@@ -481,12 +524,20 @@ final class Workspace: ObservableObject {
         selectedTabID = tabs[(index + delta + tabs.count) % tabs.count].id
     }
     private func makeSession(directory: String) -> TerminalSession {
-        let session = TerminalSession(directory: directory, shellPath: preferredShell()); configureSession?(session)
+        let session = TerminalSession(directory: directory, shellPath: preferredShell())
+        bindNativeInputEligibility(session)
+        configureSession?(session)
         session.onActivity = { [weak self, weak session] in
             guard let self, let session, let tab = self.tabs.first(where: { $0.root.sessions.contains { $0.id == session.id } }) else { return }
             self.refreshTitle(tab.id); self.onTabActivity?(tab.id)
         }
         return session
+    }
+    private func bindNativeInputEligibility(_ session: TerminalSession) {
+        session.terminal.nativeInputContextAllowsInput = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.allowsNativeInput(sessionID: session.id)
+        }
     }
     func configureTab(_ id: UUID, customTitle: String, input: InputRoute, assistant: AssistantMode) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }

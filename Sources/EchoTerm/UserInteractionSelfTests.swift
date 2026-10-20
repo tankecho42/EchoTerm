@@ -378,7 +378,7 @@ import Foundation
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("EchoTerm-native-bytes-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
         let captured = root.appendingPathComponent("keys.bin"), response = root.appendingPathComponent("device-response.bin")
-        let expected = Array("\u{1b}[A\u{1b}[B\u{1b}[D\u{1b}[C\t\u{1b}\r\u{3}\u{3}".utf8)
+        let expected = Array("\u{1b}[A\u{1b}[B\u{1b}[D\u{1b}[C\t\u{1b}\r\u{3}\u{3}\u{3}\u{4}".utf8)
         let script = """
         import os,select,sys,termios,tty
         old=termios.tcgetattr(0)
@@ -452,8 +452,10 @@ import Foundation
         let unknownCommandControlC = NativeTerminalTestDriver.key("\u{3}", code: 8, modifiers: [.command, .control], unmodified: "c", into: session.terminal)
         check(unknownCommandControlC && session.nativeInputRevision > revisionBeforeUnknownShortcut,
               "An eligible unknown Command-Control-C fallback retains native-input provenance")
+        NativeTerminalTestDriver.key("\u{3}", code: 45, modifiers: .control, unmodified: "中", into: session.terminal)
+        NativeTerminalTestDriver.key("\u{4}", code: 2, modifiers: .control, unmodified: "d", into: session.terminal)
         try await wait { !session.running && !assistant.thinking.contains(session.id) && FileManager.default.fileExists(atPath: captured.path) }
-        check((try? Data(contentsOf: captured)) == Data(expected), "AppKit arrows, native Ctrl-C and unknown Command-Control-C preserve exactly one payload each with no extra Return")
+        check((try? Data(contentsOf: captured)) == Data(expected), "AppKit arrows, native/translated Ctrl-C and other Control keys preserve exactly one raw payload each with no extra Return")
         check(session.blocks.first { $0.id == blockID }?.exitCode == 0 && requests.count == 2,
               "Native Ctrl-C is forwarded once to a raw-mode program without separately cancelling its AI task")
         check(!assistant.sendCommandKey(.enter, session: session, expectedBlockID: blockID), "Raw presets reject a command after it has exited")

@@ -1,3 +1,17 @@
+# 0.11.2 verification
+
+2026-10-20, Apple Silicon. Local deterministic API/PTY fixtures and an isolated QA application; no live paid-model calls. Production app, active shells and provider settings were not replaced.
+
+- `./scripts/test.sh --network`: **674 / 674 passed**, including real Zsh/Bash canonical and raw input, Vim arrows, both Ctrl-C monitor orders, immediate modal/tab handoff guards, hosted streaming views and localhost provider protocols. Optimized Release build completed in 32.24 seconds.
+- Completion and Block-click focus preserve the draft. Transcript/native/long-output following and read-only selection copying have dedicated checks. AppKit eligibility tests use a DEBUG window with simulated key status; they do not claim OS focus activation.
+- Hosted SwiftUI streaming caught whole-string TextKit replacement collapsing document height and moving a paused viewport. UTF-16-safe incremental text updates preserve layout; bounded reading anchors handle rewrites and repeated lines. Production NSScroller AX cycles and real coordinator live-scroll notifications verify explicit bottom intent survives extent changes, while subsequent upward input cancels it. An independent harness compiled the unchanged production view sources and reproduced the live-lifecycle failure before confirming the correction.
+- Final Release QA used a separate bundle/defaults identity. All **39 Mach-O code/data sections** match the optimized Release; only QA identity/signing metadata differs. During continuous output, visible **STREAM0106–0125** stayed fixed after scrolling halfway up. Returning to bottom restored scrollbar 1, and visible **STREAM0254–0273** advanced to **STREAM0287–0306** with new output. Block-view physical Ctrl-C returned **exit 130** and focused the latest editor. QA exited normally.
+- Earlier candidates separately verified native physical Ctrl-C, click-to-input draft preservation, and double-click auto-copy: selecting `beta`, then Command-V, inserted it without Command-C. A later candidate also visually verified headings, bold Chinese, italics, inline/code blocks, tables and links, and latest-editor focus after a streamed AI answer. These are recorded separately from the final-copy checks above.
+- An immediate same-tool-call Return-to-Blocks/Ctrl-C sequence produced an accessibility error before observed key dispatch. Exact handoff timing is checked with both local-monitor orders and a stale mounted native responder; stable native and Block key delivery were verified in actual windows. Continuous wheel/thumb lifecycle coverage uses production components; no claim of captured physical wheel gestures is made.
+- Final package: **0.11.2 / build 24**, arm64, macOS 14+, **39 / 39 independent static checks passed**. ZIP size **5506069 bytes**, SHA-256 `632d6767371e30ab93a643fc7f7b30856d55b687ad471f7f37960f813327fa1b`. Extraction, strict original/extracted signing, exact file/resource/permission equality and three dependency licenses passed. Signing is ad-hoc; Apple notarization and downloaded Gatekeeper acceptance are outside this verification.
+
+---
+
 # 0.11.1 verification
 
 2026-10-16, Apple Silicon. Local deterministic API/PTY fixtures; no live paid-model calls.

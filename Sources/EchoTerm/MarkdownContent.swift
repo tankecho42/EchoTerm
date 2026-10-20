@@ -46,16 +46,20 @@ struct MarkdownContent: View {
     let theme: TerminalTheme
     var fontSize: CGFloat = 13
     var insertCommand: ((String) -> Void)? = nil
+    var copyOnSelection = false
+    var onClick: (() -> Void)? = nil
+    var isStreaming = false
     @State private var pieces: [MarkdownPiece] = []
-    private func inline(_ text: String) -> Text {
-        Text((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text))
+    private func inline(_ text: String, size: CGFloat? = nil, weight: NSFont.Weight = .regular, color: NSColor? = nil) -> SelectableText {
+        SelectableText(text: text, font: .systemFont(ofSize: size ?? fontSize, weight: weight), color: color ?? NSColor(theme.text),
+                       copyOnSelection: copyOnSelection, label: "AI 回答", lineSpacing: 4, markdown: true, linkColor: NSColor(theme.accent), onClick: onClick)
     }
     var body: some View {
         Group {
             if text.utf8.count > 100_000 {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("长回复 · 文本视图，完整内容可滚动、选择和复制").font(.system(size: 10)).foregroundStyle(theme.muted)
-                    LongTextView(text: text, font: .monospacedSystemFont(ofSize: fontSize, weight: .regular), color: NSColor(theme.text), label: "长回复原文").frame(height: 360)
+                    LongTextView(text: text, font: .monospacedSystemFont(ofSize: fontSize, weight: .regular), color: NSColor(theme.text), label: "长回复原文", copyOnSelection: copyOnSelection, followOutput: isStreaming, onClick: onClick).frame(height: 360)
                 }
             } else { rendered }
         }.task(id: text) {
@@ -69,9 +73,9 @@ struct MarkdownContent: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
                 switch piece {
-                case .paragraph(let text): inline(text).lineSpacing(4)
-                case .heading(let level, let text): inline(text).font(.system(size: fontSize + CGFloat(max(1, 5 - level)), weight: .semibold)).padding(.top, 5)
-                case .quote(let text): HStack(alignment: .top, spacing: 10) { RoundedRectangle(cornerRadius: 2).fill(theme.accent.opacity(0.55)).frame(width: 3); inline(text).foregroundStyle(theme.muted).frame(maxWidth: .infinity, alignment: .leading) }.fixedSize(horizontal: false, vertical: true)
+                case .paragraph(let text): inline(text)
+                case .heading(let level, let text): inline(text, size: fontSize + CGFloat(max(1, 5 - level)), weight: .semibold).padding(.top, 5)
+                case .quote(let text): HStack(alignment: .top, spacing: 10) { RoundedRectangle(cornerRadius: 2).fill(theme.accent.opacity(0.55)).frame(width: 3); inline(text, color: NSColor(theme.muted)).frame(maxWidth: .infinity, alignment: .leading) }.fixedSize(horizontal: false, vertical: true)
                 case .item(let marker, let text): HStack(alignment: .top, spacing: 8) { Text(marker).foregroundStyle(theme.muted).frame(minWidth: 13); inline(text).frame(maxWidth: .infinity, alignment: .leading) }
                 case .rule: Rectangle().fill(theme.line).frame(height: 1).padding(.vertical, 4)
                 case .code(let language, let code):
@@ -86,16 +90,16 @@ struct MarkdownContent: View {
                         }.font(.system(size: 10)).buttonStyle(.plain).foregroundStyle(theme.muted).padding(.horizontal, 12).padding(.vertical, 8)
                         Rectangle().fill(theme.line).frame(height: 1)
                         if TextLayoutPolicy.needsViewport(code) {
-                            LongTextView(text: code, font: .monospacedSystemFont(ofSize: fontSize - 1, weight: .regular), color: NSColor(theme.text), label: "完整代码").frame(height: 250).padding(12)
+                            LongTextView(text: code, font: .monospacedSystemFont(ofSize: fontSize - 1, weight: .regular), color: NSColor(theme.text), label: "完整代码", copyOnSelection: copyOnSelection, onClick: onClick).frame(height: 250).padding(12)
                         } else {
-                            ScrollView(.horizontal) { Text(code).font(.system(size: fontSize - 1, design: .monospaced)).lineSpacing(4).fixedSize(horizontal: true, vertical: true).padding(12) }
+                            ScrollView(.horizontal) { SelectableText(text: code, font: .monospacedSystemFont(ofSize: fontSize - 1, weight: .regular), color: NSColor(theme.text), copyOnSelection: copyOnSelection, label: "代码", lineSpacing: 4, onClick: onClick).fixedSize(horizontal: true, vertical: true).padding(12) }
                         }
                     }.background(theme.text.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line))
                 case .table(let rows):
                     ScrollView(.horizontal) {
                         Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                GridRow { ForEach(Array(row.enumerated()), id: \.offset) { _, cell in inline(cell).fontWeight(index == 0 ? .semibold : .regular).frame(minWidth: 60, alignment: .leading) } }
+                                GridRow { ForEach(Array(row.enumerated()), id: \.offset) { _, cell in inline(cell, weight: index == 0 ? .semibold : .regular).frame(minWidth: 60, alignment: .leading) } }
                                 if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
                             }
                         }.padding(10)

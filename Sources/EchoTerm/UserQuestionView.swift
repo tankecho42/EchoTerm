@@ -57,21 +57,19 @@ struct UserQuestionView: View {
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(theme.accent)
                 Spacer(minLength: 0)
             }
-            Text(question.spec.question).font(.system(size: max(11, preferences.fontSize - 1)))
-                .foregroundStyle(theme.text).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            SelectableText(text: question.spec.question, font: .systemFont(ofSize: max(11, preferences.fontSize - 1)),
+                           color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, label: "Echo 的问题")
             if terminalBound {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("目标命令").font(.system(size: 9)).foregroundStyle(theme.muted)
                     if let command {
                         if TextLayoutPolicy.needsViewport(command.command) {
                             LongTextView(text: command.command, font: preferences.terminalFont,
-                                         color: NSColor(theme.text), label: "接收回答的原命令")
+                                         color: NSColor(theme.text), label: "接收回答的原命令", copyOnSelection: preferences.copyOnSelection)
                                 .frame(height: 100)
                         } else {
-                            Text(command.command).font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(theme.text).textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
+                            SelectableText(text: command.command, font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+                                           color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, label: "接收回答的原命令")
                         }
                     } else {
                         Text("原命令已不在当前记录中").font(.system(size: 10)).foregroundStyle(theme.muted)
@@ -138,11 +136,11 @@ struct UserQuestionView: View {
                     if response.isEmpty && terminalBound {
                         Text("Return（空行）").font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.text)
                     } else if TextLayoutPolicy.needsViewport(response) {
-                        LongTextView(text: response, font: preferences.terminalFont, color: NSColor(theme.text), label: "已提交的回答")
+                        LongTextView(text: response, font: preferences.terminalFont, color: NSColor(theme.text), label: "已提交的回答", copyOnSelection: preferences.copyOnSelection)
                             .frame(height: 140)
                     } else {
-                        Text(response).font(.system(size: 11)).foregroundStyle(theme.text)
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        SelectableText(text: response, font: .systemFont(ofSize: 11), color: NSColor(theme.text),
+                                       copyOnSelection: preferences.copyOnSelection, label: "已提交的回答")
                     }
                 }
             }

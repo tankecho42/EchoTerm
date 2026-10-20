@@ -63,12 +63,27 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
     var onResize: ((Int, Int) -> Void)?
     var keyboardFocusAllowed = false
     var nativeInputAllowed = false
+    /// Reflects session presentation immediately, before SwiftUI dismantles its
+    /// old native viewport or updates first-responder/input-gate state.
+    var nativeInputIsPresented: () -> Bool = { true }
+    var nativeInputContextAllowsInput: () -> Bool = { true }
+    var copyOnSelection = false
+    var selectionPasteboard: NSPasteboard = .general
+    private(set) var followsNormalOutput = true
+    private var pausedTopRow = 0
+    private var normalBottomRow = 0
+    private var feedingOutput = false
+    private var restoringOutputScroll = false
+    private var selectionGestureActive = false
+    private var selectionChangedByUser = false
+    private var selectionMenuDepth = 0
     private var focusPending = false
     private var nativeInputDepth = 0
     private var protocolInputDepth = 0
     private var eventMonitor: Any?
-    private func withNativeInput(_ operation: () -> Void) {
-        guard nativeInputAllowed, let window, window.isKeyWindow, window.firstResponder === self else { return }
+    func withNativeInput(_ operation: () -> Void) {
+        guard nativeInputAllowed, nativeInputIsPresented(), nativeInputContextAllowsInput(),
+              let window, window.isKeyWindow, window.firstResponder === self else { return }
         nativeInputDepth += 1
         defer { nativeInputDepth -= 1 }
         operation()
@@ -80,9 +95,25 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
               window.firstResponder === self else { return false }
         // Resolve registered app shortcuts exactly once. Unmatched Command
         // combinations still need the same native-input gate and provenance.
-        if event.modifierFlags.contains(.command), NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
+        if event.modifierFlags.contains(.command) {
+            selectionMenuDepth += 1
+            let handled = NSApp.mainMenu?.performKeyEquivalent(with: event) == true
+            selectionMenuDepth -= 1
+            if handled { commitSelectionCopy(); return true }
+        }
+        guard nativeInputContextAllowsInput() else { return true }
+        if !nativeInputIsPresented() {
+            // The window router owns Ctrl-C during the native→Block handoff.
+            // Other keys must not leak into a hidden terminal via AppKit.
+            return !window.isKeyWindow || !TerminalSession.isNativeInterrupt(event) || event.modifierFlags.contains(.command)
+        }
         guard nativeInputAllowed, window.isKeyWindow else { return true }
-        withNativeInput { self.keyDown(with: event) }
+        withNativeInput {
+            // Some input sources already supply the translated ETX. SwiftTerm's
+            // ASCII-base conversion otherwise drops it; never infer a key code.
+            if TerminalSession.isNativeInterrupt(event) { self.selectNone(); self.send(txt: "\u{03}") }
+            else { self.keyDown(with: event) }
+        }
         return true
     }
     override func insertText(_ string: Any, replacementRange: NSRange) {
@@ -90,19 +121,63 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
     }
     override func paste(_ sender: Any) { withNativeInput { super.paste(sender) } }
     private func installEventMonitor() {
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) { [weak self] event in
             guard let self, let window = self.window, event.window === window else { return event }
             if event.type == .keyDown { return self.dispatchNativeKeyDown(event) ? nil : event }
-            if let content = window.contentView {
-                // hitTest takes its point in the receiver's superview coordinates.
-                // Checking the topmost target also respects SwiftUI overlays.
-                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-                if let hit = content.hitTest(point), hit === self || hit.isDescendant(of: self) {
-                    self.onNativeFocusRequested?()
-                }
-            }
+            self.observeNativePointerEvent(event)
             return event
         }
+    }
+    /// Observe without consuming: SwiftTerm still owns selection and TUI mouse events.
+    func observeNativePointerEvent(_ event: NSEvent) {
+        guard let window, event.window === window else { return }
+        if event.type == .leftMouseUp {
+            guard selectionGestureActive else { return }
+            // The monitor runs before SwiftTerm finalizes its selection.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.selectionGestureActive = false
+                self.commitSelectionCopy()
+            }
+        } else if event.type == .leftMouseDown, let content = window.contentView {
+            // hitTest takes its point in the receiver's superview coordinates.
+            // Checking the topmost target also respects SwiftUI overlays.
+            let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+            if let hit = content.hitTest(point), hit === self || hit.isDescendant(of: self) {
+                selectionGestureActive = true
+                selectionChangedByUser = false
+                onNativeFocusRequested?()
+            }
+        }
+    }
+    override func selectionChanged(source: Terminal) {
+        super.selectionChanged(source: source)
+        if !feedingOutput && (selectionGestureActive || selectionMenuDepth > 0) { selectionChangedByUser = true }
+    }
+    private func commitSelectionCopy() {
+        guard selectionChangedByUser else { return }
+        selectionChangedByUser = false
+        _ = SelectionClipboard.copy(getSelection(), enabled: copyOnSelection, to: selectionPasteboard)
+    }
+    /// SwiftTerm's view scrolling and terminal output currently keep separate
+    /// user-scroll flags. Preserve the reading row through its public scroll API.
+    override func scrolled(source terminal: Terminal, yDisp: Int) {
+        if feedingOutput && !terminal.isCurrentBufferAlternate && !restoringOutputScroll {
+            let trimsOldLine = terminal.buffer.scrollTop == 0 && yDisp == normalBottomRow
+                && yDisp >= terminal.options.scrollback && terminal.options.scrollback > 0
+            normalBottomRow = yDisp
+            if !followsNormalOutput && trimsOldLine { pausedTopRow = max(0, pausedTopRow - 1) }
+        }
+        super.scrolled(source: terminal, yDisp: yDisp)
+    }
+    func resumeNormalOutputFollowing() {
+        followsNormalOutput = true
+        pausedTopRow = 0
+        guard !getTerminal().isCurrentBufferAlternate else { return }
+        restoringOutputScroll = true
+        scroll(toPosition: 1)
+        normalBottomRow = getTerminal().buffer.yDisp
+        restoringOutputScroll = false
     }
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         protocolInputDepth += 1
@@ -110,12 +185,12 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
         super.send(source: source, data: data)
     }
     func requestKeyboardFocus() {
-        guard keyboardFocusAllowed, !focusPending else { return }
+        guard keyboardFocusAllowed, nativeInputIsPresented(), nativeInputContextAllowsInput(), !focusPending else { return }
         focusPending = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.focusPending = false
-            guard self.keyboardFocusAllowed, let window = self.window,
+            guard self.keyboardFocusAllowed, self.nativeInputIsPresented(), self.nativeInputContextAllowsInput(), let window = self.window,
                   window.firstResponder !== self else { return }
             window.makeFirstResponder(self)
         }
@@ -125,7 +200,16 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
     deinit { if let eventMonitor { NSEvent.removeMonitor(eventMonitor) } }
     func dataReceived(slice: ArraySlice<UInt8>) {
         for event in streamParser.feed(Array(slice)) {
-            if case .output(let bytes) = event { feed(byteArray: bytes[...]) }
+            if case .output(let bytes) = event {
+                feedingOutput = true
+                feed(byteArray: bytes[...])
+                if !followsNormalOutput, !getTerminal().isCurrentBufferAlternate {
+                    restoringOutputScroll = true
+                    scrollUp(lines: max(0, getTerminal().buffer.yDisp - pausedTopRow))
+                    restoringOutputScroll = false
+                }
+                feedingOutput = false
+            }
             onEvent?(event)
         }
     }
@@ -146,7 +230,12 @@ final class BlockTerminalView: TerminalView, TerminalViewDelegate {
     }
     func setTerminalTitle(source: TerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    func scrolled(source: TerminalView, position: Double) {}
+    func scrolled(source: TerminalView, position: Double) {
+        guard !feedingOutput, !restoringOutputScroll, !getTerminal().isCurrentBufferAlternate else { return }
+        followsNormalOutput = !canScroll || position >= 1
+        pausedTopRow = getTerminal().buffer.yDisp
+        if followsNormalOutput { normalBottomRow = pausedTopRow }
+    }
     func clipboardCopy(source: TerminalView, content: Data) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }

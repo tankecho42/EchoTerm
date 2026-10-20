@@ -10,7 +10,6 @@ struct WorkspaceView: View {
     @State private var applicationActive = NSApp.isActive
     @State private var hoveredTab: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var editingTab: WorkspaceTab?
     @FocusState private var confirmCancelFocused: Bool
     private var theme: TerminalTheme { preferences.theme }
     private var sidebarVisible: Bool { preferences.sidebarPinned || sidebarExpanded }
@@ -63,13 +62,13 @@ struct WorkspaceView: View {
         .background(theme.base.opacity(preferences.opacity))
         .background(WindowMaterial(enabled: preferences.blur, material: preferences.glassMaterial))
         .foregroundStyle(theme.text).preferredColorScheme(theme.isLight ? .light : .dark).tint(theme.accent)
-        .disabled(workspace.showSettings || editingTab != nil || workspace.pendingClose != nil || workspace.pendingQuit)
-        .accessibilityHidden(workspace.showSettings || editingTab != nil || workspace.pendingClose != nil || workspace.pendingQuit)
+        .disabled(workspace.inputBlockedByModal)
+        .accessibilityHidden(workspace.inputBlockedByModal)
         .echoControls(theme)
         // App-owned panels keep NSApplication's Quit action available. A system
         // modal sheet can intercept it before the termination delegate runs.
         .overlay {
-            if workspace.showSettings || editingTab != nil {
+            if workspace.showSettings || workspace.editingTab != nil {
                 GeometryReader { geometry in
                     ZStack {
                         Color.black.opacity(0.28).ignoresSafeArea().contentShape(Rectangle())
@@ -79,9 +78,9 @@ struct WorkspaceView: View {
                                     workspace.showSettings = false
                                     workspace.activeSession?.focus()
                                 }.frame(width: min(760, geometry.size.width - 32), height: min(610, geometry.size.height - 32))
-                            } else if let tab = editingTab {
+                            } else if let tab = workspace.editingTab {
                                 TabSettingsView(tabID: tab.id, workspace: workspace, preferences: preferences) {
-                                    editingTab = nil
+                                    workspace.editingTab = nil
                                     workspace.activeSession?.focus()
                                 }
                             }
@@ -105,7 +104,7 @@ struct WorkspaceView: View {
                             Button("取消") {
                                 workspace.pendingClose = nil
                                 if workspace.pendingQuit { workspace.pendingQuit = false; NSApp.reply(toApplicationShouldTerminate: false) }
-                                if !workspace.showSettings && editingTab == nil { workspace.activeSession?.focus() }
+                                if !workspace.showSettings && workspace.editingTab == nil { workspace.activeSession?.focus() }
                             }.keyboardShortcut(.cancelAction).focusable().focused($confirmCancelFocused).focusEffectDisabled()
                             Button(workspace.pendingQuit ? "结束并退出" : "结束并关闭", role: .destructive) {
                                 if workspace.pendingQuit { workspace.pendingQuit = false; NSApp.reply(toApplicationShouldTerminate: true) }
@@ -228,7 +227,7 @@ struct WorkspaceView: View {
         .echoContextMenu(tabMenu(tab))
     }
     private func tabMenu(_ tab: WorkspaceTab) -> [EchoMenuItem] {
-        [.init(title: "标签设置与重命名…", icon: "pawprint") { editingTab = tab }] +
+        [.init(title: "标签设置与重命名…", icon: "pawprint") { workspace.editingTab = tab }] +
         InputRoute.allCases.map { route in .init(title: "默认输入 · " + route.title, selected: route == tab.defaultInputRoute) { workspace.configureTab(tab.id, customTitle: tab.customTitle ?? "", input: route, assistant: tab.defaultAssistantMode) } } +
         AssistantMode.allCases.map { mode in .init(title: "默认 AI · " + mode.title, selected: mode == tab.defaultAssistantMode) { workspace.configureTab(tab.id, customTitle: tab.customTitle ?? "", input: tab.defaultInputRoute, assistant: mode) } } + [
             .init(title: "关闭标签页", icon: "xmark") { workspace.closeTab(tab.id) }

@@ -19,7 +19,7 @@ import SwiftUI
                 Divider()
                 Button("搜索区块") { delegate.workspace.activeSession?.showSearch.toggle() }.keyboardShortcut("f")
                 Button("清空已完成区块") { delegate.workspace.activeSession?.clear() }.keyboardShortcut("k")
-                Button("回到当前输入") { delegate.workspace.activeSession?.selectedBlockID = nil; delegate.workspace.activeSession?.focus() }.keyboardShortcut("r", modifiers: [.command, .shift])
+                Button("回到当前输入") { if let session = delegate.workspace.activeSession { delegate.workspace.focusCurrentInput(sessionID: session.id) } }.keyboardShortcut("r", modifiers: [.command, .shift])
                 Button("下一个标签页") { delegate.workspace.nextTab(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
                 Button("上一个标签页") { delegate.workspace.nextTab(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
             }
@@ -39,9 +39,21 @@ import SwiftUI
     let usage = AIUsageStore(fileURL: AIUsageStore.defaultURL)
     lazy var assistant = AssistantStore(providers: providers, preferences: preferences, usage: usage)
     var tabTitles: TabTitleCoordinator?
+    var commandInputRouter: WindowCommandInputRouter?
     var window: NSWindow!
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        if CommandLine.arguments.contains("--self-test-selection") {
+            Task { @MainActor in
+                var failures = 0
+                await SelectionCopySelfTests.run { passed, name in
+                    print("\(passed ? "PASS" : "FAIL") \(name)")
+                    if !passed { failures += 1 }
+                }
+                exit(failures == 0 ? 0 : 1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--self-test") {
             Task { @MainActor in exit(await SelfTests.run() ? 0 : 1) }
             return
@@ -87,6 +99,7 @@ import SwiftUI
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.contentView = NSHostingView(rootView: WorkspaceView(workspace: workspace, preferences: preferences, providers: providers, assistant: assistant).ignoresSafeArea())
+        commandInputRouter = WindowCommandInputRouter(window: window, workspace: workspace)
         window.delegate = self; window.setFrameAutosaveName("EchoTerm.main")
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }

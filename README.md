@@ -1,6 +1,6 @@
 # EchoTerm
 
-命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.1**。
+命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.2**。
 
 ![EchoTerm](promo/v10-en/output/EchoTerm-Promo-English-v10-poster.png)
 
@@ -38,6 +38,13 @@
 swift test                     # XCTest 测试（需要完整 Xcode）
 ./scripts/run.sh --demo         # 展示明确标识的示例 AI 气泡，终端仍是真实 shell
 ```
+
+## 0.11.2 的主要变化
+
+- 上一条命令结束后，当前面板自动回到最新 Block 的输入框；点击 Block 的空白区域也可直接输入，保留现有草稿。
+- 运行输出默认跟随底部；手动上翻暂停，回到底部恢复。原生终端、Block 记录与长输出分别维护滚动位置，TUI 保持自身滚动行为。
+- 设置新增「选中文本后自动复制」，默认关闭；开启后适用于终端输出、历史记录和 AI 回答，编辑输入框不参与。
+- 修复切回 Block 视图后 Ctrl+C 无法中断当前命令；原生键盘与 TUI 仍按原有输入方式处理，设置和其他输入框保留自己的按键。
 
 ## 0.11.1 的主要变化
 

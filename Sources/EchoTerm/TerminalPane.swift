@@ -17,6 +17,8 @@ struct TerminalPane: View {
     @State private var completionTask: Task<Void, Never>?
     @State private var visibleBlockID: UUID?
     @State private var followBottom = true
+    @State private var editorFocusRevision = 0
+    @State private var explicitInputFocus = false
     @State private var auxiliaryInputVisible = false
     @State private var commandInputDrafts: [UUID: String] = [:]
     @State private var questionInputDrafts: [UUID: String] = [:]
@@ -38,51 +40,59 @@ struct TerminalPane: View {
                 } else {
                     ScrollViewReader { reader in
                         ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(session.blocks.enumerated()), id: \.element.id) { index, block in
-                                    VStack(spacing: 0) {
-                                        if block.isAI {
-                                            InlineAIBlock(block: block, index: index, showsAvatar: block.id == latestAIBlockID, session: session, assistant: assistant, workspace: workspace, preferences: preferences)
-                                        } else {
-                                            blockView(block, index: index)
-                                            if let preview = assistant.blockIntents[block.id], preferences.quickIntents {
-                                                InlineIntentOptions(preview: preview, session: session, assistant: assistant, preferences: preferences)
+                            VStack(spacing: 0) {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(Array(session.blocks.enumerated()), id: \.element.id) { index, block in
+                                        VStack(spacing: 0) {
+                                            if block.isAI {
+                                                InlineAIBlock(block: block, index: index, showsAvatar: block.id == latestAIBlockID, session: session, assistant: assistant, workspace: workspace, preferences: preferences)
+                                            } else {
+                                                blockView(block, index: index)
+                                                if let preview = assistant.blockIntents[block.id], preferences.quickIntents {
+                                                    InlineIntentOptions(preview: preview, session: session, assistant: assistant, preferences: preferences)
+                                                }
+                                            }
+                                        }.overlay(alignment: .leading) {
+                                            if let marker = block.marker {
+                                                Rectangle().fill(marker.color(light: theme.isLight)).frame(width: 2)
+                                                    .padding(.top, 1).allowsHitTesting(false).accessibilityHidden(true)
                                             }
                                         }
-                                    }.overlay(alignment: .leading) {
-                                        if let marker = block.marker {
-                                            Rectangle().fill(marker.color(light: theme.isLight)).frame(width: 2)
-                                                .padding(.top, 1).allowsHitTesting(false).accessibilityHidden(true)
-                                        }
+                                        .modifier(BlockRevealHighlight(reveal: session.blockReveal?.blockID == block.id ? session.blockReveal : nil, theme: theme))
+                                        .background(GeometryReader { geo in Color.clear.preference(key: BlockFrames.self, value: [block.id: geo.frame(in: .named(session.id))]) }).id(block.id)
                                     }
-                                    .modifier(BlockRevealHighlight(reveal: session.blockReveal?.blockID == block.id ? session.blockReveal : nil, theme: theme))
-                                    .background(GeometryReader { geo in Color.clear.preference(key: BlockFrames.self, value: [block.id: geo.frame(in: .named(session.id))]) }).id(block.id)
                                 }
+                                // Keep the current editor mounted when historical blocks are offscreen.
                                 if assistant.canStartBlock(in: session) && !session.exited { inputBlock.id(session.inputBlockID) }
                                 if session.exited || session.shellError != nil {
                                     HStack { Text(session.shellError ?? "Shell 会话已结束"); Spacer(); Button("新建会话") { workspace.addTab(directory: session.directory) } }.font(.system(size: 11)).padding(20).foregroundStyle(theme.muted)
                                 }
                                 Color.clear.frame(height: 0).id("end")
                             }.frame(maxWidth: .infinity, alignment: .topLeading)
+                                .background(TranscriptScrollObserver { metrics, movedUp in
+                                    if movedUp && !metrics.isAtBottom { followBottom = false }
+                                    else if metrics.isAtBottom && session.readingAnchorID == nil { followBottom = true }
+                                    if followBottom && session.readingAnchorID == nil && !metrics.isAtBottom {
+                                        reader.scrollTo("end", anchor: .bottom)
+                                    }
+                                })
                         }
                         .contentMargins(.all, 0, for: .scrollContent)
                         .coordinateSpace(name: session.id)
                         .onAppear {
                             if let id = session.readingAnchorID { reader.scrollTo(id, anchor: .top) }
-                            else { scrollToCurrent(reader) }
+                            else if followBottom { scrollToCurrent(reader) }
                         }
-                        .background(ScrollActivityObserver { if followBottom { followBottom = false } })
                         .onPreferenceChange(BlockFrames.self) { frames in
                             let next = session.blocks.first { block in guard let frame = frames[block.id] else { return false }; return frame.maxY > 50 && frame.minY < viewport.size.height }?.id
                             if next != visibleBlockID { visibleBlockID = next }
                         }
-                        .simultaneousGesture(DragGesture(minimumDistance: 3).onChanged { _ in followBottom = false })
                         .onChange(of: session.selectedBlockID) { _, id in
                             if let id { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .top) } }
                         }
                         .onChange(of: session.blocks.count) { _, _ in
-                            guard session.readingAnchorID == nil else { return }
-                            followBottom = true; scrollToCurrent(reader)
+                            guard followBottom, session.readingAnchorID == nil else { return }
+                            scrollToCurrent(reader)
                         }
                         .task(id: session.blockReveal?.id) {
                             guard let target = session.readingAnchorID else { return }
@@ -91,21 +101,16 @@ struct TerminalPane: View {
                             guard !Task.isCancelled else { return }
                             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { reader.scrollTo(target, anchor: .top) }
                         }
-                        .onChange(of: assistant.canStartBlock(in: session)) { _, ready in
-                            guard ready, followBottom, session.readingAnchorID == nil,
-                                  session.selectedBlockID == nil || session.selectedBlockID == session.blocks.last?.id else { return }
-                            if active && !workspace.assistantWantsFocus && !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil {
-                                session.selectedBlockID = nil
-                                session.focus()
-                            } else { scrollToCurrent(reader) }
+                        .onChange(of: editorFocusRevision) { _, _ in
+                            // Successful editor focus is the one-time completion / explicit-click
+                            // return to the newest input, even when live output was paused.
+                            followBottom = true
+                            reader.scrollTo("end", anchor: .bottom)
                         }
-                        .onChange(of: session.focusRequest) { _, _ in
-                            if !session.running {
-                                if let selected = session.selectedBlockID {
-                                    followBottom = false
-                                    reader.scrollTo(selected, anchor: .top)
-                                } else { followBottom = true; scrollToCurrent(reader) }
-                            }
+                        .onChange(of: workspace.currentInputFocusRequest) { _, _ in
+                            guard workspace.currentInputFocusSessionID == session.id, !session.running else { return }
+                            followBottom = true
+                            scrollToCurrent(reader)
                         }
                         .onChange(of: session.liveOutput) { _, _ in if followBottom { reader.scrollTo("end", anchor: .bottom) } }
                         .onChange(of: assistant.messages(for: session).last?.text) { _, _ in if followBottom { reader.scrollTo("end", anchor: .bottom) } }
@@ -125,7 +130,16 @@ struct TerminalPane: View {
         .overlay(alignment: .top) { if isSplit { Rectangle().fill(active ? theme.accent.opacity(0.28) : theme.line).frame(height: 1) } }
         .onAppear { session.usesBlockEditor = true; session.start(); if active { session.focus() } }
         .onDisappear { completionTask?.cancel() }
-        .onChange(of: active) { _, value in if value { session.focus() } }
+        .onChange(of: active) { _, value in
+            if value { session.focus() } else { explicitInputFocus = false }
+        }
+        .onChange(of: workspace.currentInputFocusRequest) { _, _ in
+            if workspace.currentInputFocusSessionID == session.id { explicitInputFocus = !session.running }
+        }
+        .onChange(of: assistant.canStartBlock(in: session)) { _, ready in
+            if ready && inputMayAutomaticallyFocus { session.focus() }
+        }
+        .onChange(of: inputMayAutomaticallyFocus) { _, allowed in if !allowed { explicitInputFocus = false } }
         .onChange(of: session.ready) { _, value in if value && active { session.focus() } }
         .onChange(of: session.presentsInteractiveTerminal) { _, presented in
             // The transcript observers are detached while the native viewport
@@ -233,7 +247,7 @@ struct TerminalPane: View {
         let running = block.id == session.runningBlockID && session.running
         return TerminalBlockRow(block: block, index: index, selected: session.selectedBlockID == block.id,
                                 running: running, liveOutput: session.liveOutput, preferences: preferences,
-                                select: { workspace.assistantWantsFocus = false; workspace.selectSession(session.id); session.selectedBlockID = block.id },
+                                select: { workspace.focusCurrentInput(sessionID: session.id) },
                                 reuse: { _ = session.insert(block.command) },
                                 explain: { workspace.selectSession(session.id); assistant.explain(block, session: session) },
                                 interrupt: { if session.agentOwner != nil { assistant.cancel(session: session) } else { session.interrupt() } },
@@ -266,12 +280,20 @@ struct TerminalPane: View {
             }.font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.muted).padding(.horizontal, 16).padding(.top, 5)
             HStack(alignment: .top, spacing: 10) {
                 Text("❯").font(.system(size: preferences.fontSize, weight: .medium, design: .monospaced)).foregroundStyle(theme.accent).padding(.top, 1)
-                InlineCommandEditor(text: $session.draft, height: $editorHeight, font: preferences.terminalFont, color: NSColor(theme.text), caret: NSColor(theme.accent), focusRequest: session.focusRequest, enabled: session.ready && active && session.agentOwner == nil && !workspace.pendingQuit && workspace.pendingClose == nil, automaticallyFocus: session.readingAnchorID == nil && !workspace.assistantWantsFocus && !workspace.pendingQuit && workspace.pendingClose == nil,
+                InlineCommandEditor(text: $session.draft, height: $editorHeight, font: preferences.terminalFont, color: NSColor(theme.text), caret: NSColor(theme.accent), focusRequest: session.focusRequest,
+                                    enabled: session.ready && active && session.agentOwner == nil && !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil,
+                                    automaticallyFocus: inputMayAutomaticallyFocus,
+                                    explicitFocus: explicitInputFocus, focusOwnerID: session.id,
                                     completion: completion, commandAssessment: assessment,
                                     onCycleCompletion: { direction in guard !completions.isEmpty else { return nil }; completionIndex = (completionIndex + direction + completions.count) % completions.count; return completions[completionIndex] },
                                     onForcedSubmit: { submit($0) },
                                     onSubmit: { submit() }, onHistory: { session.history($0) },
-                                    onFocus: { session.resumeInput(); workspace.assistantWantsFocus = false; if session.selectedBlockID != nil { session.selectedBlockID = nil }; workspace.selectSession(session.id) },
+                                    onFocus: {
+                                        explicitInputFocus = false
+                                        session.resumeInput(); workspace.assistantWantsFocus = false
+                                        session.selectedBlockID = nil; workspace.selectSession(session.id)
+                                        editorFocusRevision += 1
+                                    },
                                     onCancel: { session.draft = "" })
                     .frame(height: editorHeight)
             }.padding(.horizontal, 16)
@@ -282,18 +304,13 @@ struct TerminalPane: View {
             if let error = session.insertionError { Text(error).font(.system(size: 10)).foregroundStyle(.orange).padding(.horizontal, 16) }
         }.padding(.bottom, 22).frame(maxWidth: .infinity, alignment: .leading)
             .background(theme.accent.opacity(session.selectedBlockID == nil && active ? 0.025 : 0))
-            .task {
-                // Let the outgoing native viewport detach before requesting the
-                // newly mounted block editor; state changes can precede its window.
-                await Task.yield()
-                guard !Task.isCancelled, active, followBottom, session.ready, !session.exited,
-                      assistant.canStartBlock(in: session), session.readingAnchorID == nil,
-                      !workspace.assistantWantsFocus, !workspace.showSettings, !session.showSearch,
-                      !workspace.pendingQuit, workspace.pendingClose == nil,
-                      session.selectedBlockID == nil || session.selectedBlockID == session.blocks.last?.id else { return }
-                session.selectedBlockID = nil
-                session.focus()
-            }
+            .contentShape(Rectangle())
+            .onTapGesture { workspace.focusCurrentInput(sessionID: session.id) }
+    }
+    private var inputMayAutomaticallyFocus: Bool {
+        active && session.ready && !session.exited && session.readingAnchorID == nil &&
+        !workspace.assistantWantsFocus && !workspace.showSettings && !session.showSearch &&
+        !workspace.pendingQuit && workspace.pendingClose == nil
     }
     private var inputHint: some View {
         HStack(spacing: 7) {
@@ -414,27 +431,6 @@ private struct RunningCommandInput: View {
     }
 }
 
-private struct ScrollActivityObserver: NSViewRepresentable {
-    var onScroll: () -> Void
-    final class ObserverView: NSView {
-        var onScroll: (() -> Void)?
-        var monitor: Any?
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                if let self, event.window == self.window, self.bounds.contains(self.convert(event.locationInWindow, from: nil)), abs(event.scrollingDeltaY) > 0 { self.onScroll?() }
-                return event
-            }
-        }
-        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
-    }
-    func makeNSView(context: Context) -> ObserverView { ObserverView() }
-    func updateNSView(_ view: ObserverView, context: Context) { view.onScroll = onScroll }
-}
-
 private struct TerminalBlockRow<Interaction: View>: View {
     let block: CommandBlock
     let index: Int
@@ -480,13 +476,13 @@ private struct TerminalBlockRow<Interaction: View>: View {
             HStack(alignment: .top, spacing: 10) {
                 Text("❯").foregroundStyle(theme.accent.opacity(selected || hovered ? 1 : 0.7))
                 if TextLayoutPolicy.needsViewport(block.command) {
-                    LongTextView(text: block.command, font: preferences.terminalFont, color: NSColor(theme.text), label: "完整命令").frame(height: 120)
+                    LongTextView(text: block.command, font: preferences.terminalFont, color: NSColor(theme.text), label: "完整命令", copyOnSelection: preferences.copyOnSelection, onClick: select).frame(height: 120)
                 } else {
-                    Text(block.command).foregroundStyle(theme.text.opacity(selected || hovered ? 0.97 : 0.83)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    SelectableText(text: block.command, font: preferences.terminalFont, color: NSColor(theme.text.opacity(selected || hovered ? 0.97 : 0.83)), copyOnSelection: preferences.copyOnSelection, label: "命令", onClick: select).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }.font(Font(preferences.terminalFont)).padding(.horizontal, 16)
             if !collapsed && !output.isEmpty {
-                BlockOutput(text: output, font: preferences.terminalFont, color: theme.text.opacity(selected || hovered ? 0.9 : 0.7))
+                BlockOutput(text: output, font: preferences.terminalFont, color: theme.text.opacity(selected || hovered ? 0.9 : 0.7), copyOnSelection: preferences.copyOnSelection, followOutput: running, onClick: select)
                     .padding(.leading, 39).padding(.trailing, 16)
             }
             if collapsed { Text("输出已折叠").font(.system(size: 10)).foregroundStyle(theme.muted).padding(.leading, 39) }
@@ -504,12 +500,16 @@ private struct BlockOutput: View {
     let text: String
     let font: NSFont
     let color: Color
+    var copyOnSelection = false
+    var followOutput = false
+    var onClick: (() -> Void)? = nil
     var body: some View {
         if TextLayoutPolicy.needsViewport(text) {
-            LongTextView(text: text, font: font, color: NSColor(color), label: "完整命令输出").frame(height: 300)
-        } else { content }
+            LongTextView(text: text, font: font, color: NSColor(color), label: "完整命令输出", copyOnSelection: copyOnSelection, followOutput: followOutput, onClick: onClick).frame(height: 300)
+        } else {
+            SelectableText(text: text, font: font, color: NSColor(color), copyOnSelection: copyOnSelection, label: "命令输出", lineSpacing: 3, onClick: onClick).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
-    private var content: some View { Text(text).font(Font(font)).foregroundStyle(color).lineSpacing(3).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
 }
 
 struct TerminalHost: NSViewRepresentable {
@@ -597,12 +597,15 @@ struct BlockSearch: View {
                         VStack(alignment: .leading, spacing: 9) {
                             HStack(alignment: .top) {
                                 Image(systemName: block.exitCode == 0 ? "checkmark" : "circle").font(.system(size: 9)).foregroundStyle(block.exitCode == 0 ? theme.accent : .orange)
-                                Text(block.command).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                                SelectableText(text: block.command, font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, label: "搜索结果命令")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 Spacer()
                                 Text(block.duration).font(.system(size: 9, design: .monospaced)).foregroundStyle(theme.muted)
                             }
                             if !block.output.isEmpty {
-                                DisclosureGroup("输出") { ScrollView([.vertical, .horizontal]) { Text(block.output).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: true, vertical: false).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 200) }.font(.system(size: 10)).foregroundStyle(theme.muted)
+                                DisclosureGroup("输出") {
+                                    LongTextView(text: block.output, font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: NSColor(theme.text), label: "搜索结果输出", copyOnSelection: preferences.copyOnSelection).frame(height: 200)
+                                }.font(.system(size: 10)).foregroundStyle(theme.muted)
                             }
                             HStack(spacing: 14) {
                                 Button("填入命令") { if session.insert(block.command) { session.showSearch = false } }.disabled(session.running)

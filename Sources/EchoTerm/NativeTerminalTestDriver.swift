@@ -11,12 +11,15 @@ import SwiftUI
     static func insert(_ text: String, into terminal: BlockTerminalView) {
         terminal.insertText(text as NSString, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
-    @discardableResult static func key(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], unmodified: String? = nil, into terminal: BlockTerminalView) -> Bool {
-        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+    static func keyEvent(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], unmodified: String? = nil, into terminal: BlockTerminalView) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                                     timestamp: ProcessInfo.processInfo.systemUptime,
                                     windowNumber: terminal.window?.windowNumber ?? 0, context: nil,
                                     characters: characters, charactersIgnoringModifiers: unmodified ?? characters,
                                     isARepeat: false, keyCode: code)!
+    }
+    @discardableResult static func key(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = [], unmodified: String? = nil, into terminal: BlockTerminalView) -> Bool {
+        let event = keyEvent(characters, code: code, modifiers: modifiers, unmodified: unmodified, into: terminal)
         // This is the same dispatcher used by the window-scoped event monitor;
         // it calls inherited AppKit keyDown once under native-input provenance.
         return terminal.dispatchNativeKeyDown(event)
@@ -26,6 +29,18 @@ import SwiftUI
     static func down(_ terminal: BlockTerminalView) { key("\u{f701}", code: 125, modifiers: [.function, .numericPad], into: terminal) }
     static func up(_ terminal: BlockTerminalView) { key("\u{f700}", code: 126, modifiers: [.function, .numericPad], into: terminal) }
     static func controlC(_ terminal: BlockTerminalView) { key("\u{3}", code: 8, modifiers: .control, unmodified: "c", into: terminal) }
+    static func click(_ terminal: BlockTerminalView, clickCount: Int = 1) {
+        let point = terminal.convert(NSPoint(x: 24, y: max(1, terminal.bounds.height - 12)), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime,
+                                          windowNumber: terminal.window?.windowNumber ?? 0,
+                                          context: nil, eventNumber: 1, clickCount: clickCount, pressure: 1)!
+            terminal.observeNativePointerEvent(event)
+            if type == .leftMouseDown { terminal.mouseDown(with: event) }
+            else { terminal.mouseUp(with: event) }
+        }
+    }
 }
 
 /// A CLI component fixture controls only the key-window flag. OS focus and event

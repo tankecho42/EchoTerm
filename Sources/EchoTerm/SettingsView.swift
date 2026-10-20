@@ -73,6 +73,8 @@ struct SettingsView: View {
             Text("Bash / Zsh 负责执行命令，界面使用统一的区块提示符。更改 Shell 对新标签页生效。").font(.system(size: 10)).foregroundStyle(theme.muted)
             EchoLabeledChoice(title: "终端字体", selection: $preferences.fontName, choices: [.init(value: "自动", title: "自动（优先 Nerd Font）")] + Preferences.fontFamilies.map { .init(value: $0, title: $0) })
             EchoStepper(title: "终端字号 · \(Int(preferences.fontSize)) pt", value: Binding(get: { Int(preferences.fontSize) }, set: { preferences.fontSize = Double($0) }), range: 10...20)
+            Toggle("选中文本后自动复制", isOn: $preferences.copyOnSelection).toggleStyle(EchoToggleStyle()).controlSize(.small).font(.system(size: 12))
+            Text("适用于终端输出、历史记录与 AI 回答；输入框不参与。关闭时仍可使用 ⌘C 或复制按钮。").font(.system(size: 10)).foregroundStyle(theme.muted)
         }
     }
     private var intelligence: some View {

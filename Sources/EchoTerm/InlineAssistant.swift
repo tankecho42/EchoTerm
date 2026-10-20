@@ -34,17 +34,18 @@ struct AssistantReplyContent: View {
     @ObservedObject var workspace: Workspace
     @ObservedObject var preferences: Preferences
     var showSteps = true
+    var onClick: (() -> Void)? = nil
     private var theme: TerminalTheme { preferences.theme }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !reply.text.isEmpty { MarkdownContent(text: reply.text, theme: theme, insertCommand: { _ = session.insert($0) }) }
+            if !reply.text.isEmpty { MarkdownContent(text: reply.text, theme: theme, insertCommand: { _ = session.insert($0) }, copyOnSelection: preferences.copyOnSelection, onClick: onClick, isStreaming: reply.isStreaming) }
             ForEach(reply.steps.filter { showSteps || $0.kind != .command }) { step in
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: step.kind.icon).foregroundStyle(theme.accent)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(step.command).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                        if !step.explanation.isEmpty { Text(step.explanation).font(.system(size: 10)).foregroundStyle(theme.muted) }
-                        Text(step.status).font(.system(size: 9)).foregroundStyle(theme.muted)
+                        SelectableText(text: step.command, font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, onClick: onClick)
+                        if !step.explanation.isEmpty { SelectableText(text: step.explanation, font: .systemFont(ofSize: 10), color: NSColor(theme.muted), copyOnSelection: preferences.copyOnSelection, onClick: onClick) }
+                        SelectableText(text: step.status, font: .systemFont(ofSize: 9), color: NSColor(theme.muted), copyOnSelection: preferences.copyOnSelection, onClick: onClick)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     if let id = step.blockID { Button { workspace.revealBlock(sessionID: step.sessionID ?? session.id, blockID: id) } label: { Image(systemName: "arrow.down.right") }.buttonStyle(.plain).help("跳转到这个区块") }
                 }.padding(11).background(theme.text.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius: 7))
@@ -53,11 +54,11 @@ struct AssistantReplyContent: View {
                 UserQuestionView(question: question, session: session, assistant: assistant,
                                  workspace: workspace, preferences: preferences)
             }
-            if !reply.status.isEmpty { Text(reply.status).font(.system(size: 11)).foregroundStyle(.orange).textSelection(.enabled) }
+            if !reply.status.isEmpty { SelectableText(text: reply.status, font: .systemFont(ofSize: 11), color: .systemOrange, copyOnSelection: preferences.copyOnSelection, onClick: onClick) }
             ForEach(reply.suggestions) { suggestion in
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(suggestion.command).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-                    Text(suggestion.explanation).font(.system(size: 11)).foregroundStyle(theme.muted)
+                    SelectableText(text: suggestion.command, font: .monospacedSystemFont(ofSize: 12, weight: .regular), color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, onClick: onClick)
+                    SelectableText(text: suggestion.explanation, font: .systemFont(ofSize: 11), color: NSColor(theme.muted), copyOnSelection: preferences.copyOnSelection, onClick: onClick)
                     HStack {
                         if suggestion.state == "pending" {
                             Button("填入终端") { assistant.use(suggestion, session: session) }.disabled(session.running || session.agentOwner != nil)
@@ -100,9 +101,9 @@ struct InlineAIBlock: View {
             if block.assistantContinuation != true { HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "sparkle").font(.system(size: 12)).foregroundStyle(theme.accent).frame(width: 13).padding(.top, 3)
                 if TextLayoutPolicy.needsViewport(block.command) {
-                    LongTextView(text: block.command, font: .systemFont(ofSize: preferences.fontSize), color: NSColor(theme.text), label: "完整提问").frame(height: 120)
+                    LongTextView(text: block.command, font: .systemFont(ofSize: preferences.fontSize), color: NSColor(theme.text), label: "完整提问", copyOnSelection: preferences.copyOnSelection, onClick: focusCurrentInput).frame(height: 120)
                 } else {
-                    Text(block.command).font(.system(size: preferences.fontSize)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    SelectableText(text: block.command, font: .systemFont(ofSize: preferences.fontSize), color: NSColor(theme.text), copyOnSelection: preferences.copyOnSelection, label: "提问", onClick: focusCurrentInput).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }.padding(.horizontal, 16) }
             if !collapsed {
@@ -113,16 +114,17 @@ struct InlineAIBlock: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let reply {
                             if activeReply { Text(assistant.phases[session.id] ?? "思考中…").font(.system(size: 10)).foregroundStyle(theme.muted) }
-                            AssistantReplyContent(reply: reply, session: session, assistant: assistant, workspace: workspace, preferences: preferences, showSteps: false)
+                            AssistantReplyContent(reply: reply, session: session, assistant: assistant, workspace: workspace, preferences: preferences, showSteps: false, onClick: focusCurrentInput)
                         }
                     }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
                 }.padding(.leading, 10).padding(.trailing, 20)
             }
         }.padding(.bottom, 24).frame(maxWidth: .infinity, alignment: .leading)
             .background(session.selectedBlockID == block.id ? Color.black.opacity(theme.isLight ? 0.035 : 0.16) : theme.accent.opacity(hovered ? 0.035 : 0.015))
-            .contentShape(Rectangle()).onTapGesture { workspace.selectSession(session.id); session.selectedBlockID = block.id }.onHover { hovered = $0 }
+            .contentShape(Rectangle()).onTapGesture(perform: focusCurrentInput).onHover { hovered = $0 }
             .accessibilityElement(children: .contain).accessibilityLabel("AI 区块 \(index + 1)，\(String(block.command.prefix(180)))")
     }
+    private func focusCurrentInput() { _ = workspace.focusCurrentInput(sessionID: session.id) }
     private var header: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {

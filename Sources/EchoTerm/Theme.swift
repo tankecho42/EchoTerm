@@ -73,6 +73,7 @@ final class Preferences: ObservableObject {
     @Published var quickIntents: Bool { didSet { save() } }
     @Published var quickProviderID: String { didSet { save() } }
     @Published var shareContext: Bool { didSet { save() } }
+    @Published var copyOnSelection: Bool { didSet { save() } }
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -96,6 +97,7 @@ final class Preferences: ObservableObject {
         agentStepLimit = min(24, max(1, defaults.object(forKey: "agentStepLimit") as? Int ?? 8))
         commandTimeout = min(600, max(10, defaults.object(forKey: "commandTimeout") as? Double ?? 60))
         shareContext = defaults.object(forKey: "shareContext") as? Bool ?? true
+        copyOnSelection = defaults.object(forKey: "copyOnSelection") as? Bool ?? false
     }
     private func save() {
         defaults.set(sidebarPinned, forKey: "sidebarPinned")
@@ -118,6 +120,7 @@ final class Preferences: ObservableObject {
         defaults.set(agentStepLimit, forKey: "agentStepLimit")
         defaults.set(commandTimeout, forKey: "commandTimeout")
         defaults.set(shareContext, forKey: "shareContext")
+        defaults.set(copyOnSelection, forKey: "copyOnSelection")
     }
     static var fontFamilies: [String] {
         NSFontManager.shared.availableFontFamilies.filter { family in
