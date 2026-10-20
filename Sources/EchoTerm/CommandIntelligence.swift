@@ -92,11 +92,20 @@ struct ShellCommandCatalog {
         }
         return .init(isCommand: found, range: word.range)
     }
+    /// Input history arrives oldest-first. Keep each complete command's most
+    /// recent occurrence; matching is literal and never evaluates shell text.
+    static func historyCompletions(for input: String, history: [String]) -> [String] {
+        guard input.utf8.count <= 4_000, !input.contains("\n") else { return [] }
+        var seen: Set<String> = []
+        return history.reversed().filter {
+            !$0.isEmpty && !$0.contains("\n") && $0 != input && $0.hasPrefix(input) && seen.insert($0).inserted
+        }
+    }
     func completions(for input: String, directory: String, history: [String]) -> [String] {
         guard !input.isEmpty, !input.contains("\n") else { return [] }
         var candidates: [String] = [], seen: Set<String> = []
         func add(_ value: String) { if value != input && value.hasPrefix(input) && seen.insert(value).inserted { candidates.append(value) } }
-        history.reversed().filter { $0.hasPrefix(input) }.forEach(add)
+        Self.historyCompletions(for: input, history: history).forEach(add)
         let words = ShellWords.parse(input)
         let trailing = input.last?.isWhitespace == true
         let last = trailing ? ShellWord(value: "", range: NSRange(location: (input as NSString).length, length: 0), dynamic: false) : words.last

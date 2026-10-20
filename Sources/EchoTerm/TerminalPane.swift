@@ -13,7 +13,6 @@ struct TerminalPane: View {
     @ObservedObject var assistant: AssistantStore
     @State private var editorHeight: CGFloat = 24
     @State private var completions: [String] = []
-    @State private var completionIndex = 0
     @State private var completionTask: Task<Void, Never>?
     @State private var visibleBlockID: UUID?
     @State private var followBottom = true
@@ -28,7 +27,9 @@ struct TerminalPane: View {
     private var isSplit: Bool { (workspace.activeTab?.root.sessions.count ?? 0) > 1 }
     @State private var assessment = CommandAssessment(isCommand: false)
     private var route: InputRoute { session.inputRoute == .automatic ? (assessment.isCommand ? .shell : .assistant) : session.inputRoute }
-    private var completion: String? { completions.indices.contains(completionIndex) ? completions[completionIndex] : nil }
+    private var completion: String? { completions.first }
+    private var commandHistory: [String] { session.blocks.filter { !$0.isAI && !$0.isDemo }.map(\.command) }
+    private var completionCandidates: [String] { ShellCommandCatalog.historyCompletions(for: session.draft, history: commandHistory) }
     var body: some View {
         let latestAIBlockID = session.blocks.last(where: \.isAI)?.id
         return VStack(spacing: 0) {
@@ -281,11 +282,10 @@ struct TerminalPane: View {
             HStack(alignment: .top, spacing: 10) {
                 Text("❯").font(.system(size: preferences.fontSize, weight: .medium, design: .monospaced)).foregroundStyle(theme.accent).padding(.top, 1)
                 InlineCommandEditor(text: $session.draft, height: $editorHeight, font: preferences.terminalFont, color: NSColor(theme.text), caret: NSColor(theme.accent), focusRequest: session.focusRequest,
-                                    enabled: session.ready && active && session.agentOwner == nil && !workspace.showSettings && !workspace.pendingQuit && workspace.pendingClose == nil,
+                                    enabled: session.ready && active && session.agentOwner == nil && !workspace.inputBlockedByModal,
                                     automaticallyFocus: inputMayAutomaticallyFocus,
                                     explicitFocus: explicitInputFocus, focusOwnerID: session.id,
-                                    completion: completion, commandAssessment: assessment,
-                                    onCycleCompletion: { direction in guard !completions.isEmpty else { return nil }; completionIndex = (completionIndex + direction + completions.count) % completions.count; return completions[completionIndex] },
+                                    completion: completion, completionCandidates: completionCandidates, commandAssessment: assessment,
                                     onForcedSubmit: { submit($0) },
                                     onSubmit: { submit() }, onHistory: { session.history($0) },
                                     onFocus: {
@@ -309,29 +309,32 @@ struct TerminalPane: View {
     }
     private var inputMayAutomaticallyFocus: Bool {
         active && session.ready && !session.exited && session.readingAnchorID == nil &&
-        !workspace.assistantWantsFocus && !workspace.showSettings && !session.showSearch &&
-        !workspace.pendingQuit && workspace.pendingClose == nil
+        !workspace.assistantWantsFocus && !workspace.inputBlockedByModal && !session.showSearch
     }
     private var inputHint: some View {
         HStack(spacing: 7) {
-            if session.draft.isEmpty { Text("命令，或直接问 Echo") }
+            if session.draft.isEmpty {
+                Text("命令，或直接问 Echo")
+                if !completionCandidates.isEmpty { Text("· ↑↓ 历史 · Tab 候选") }
+            }
             else {
                 Image(systemName: route == .shell ? "return" : "sparkle")
                 Text(route == .shell ? (assessment.dynamic ? "Return · 交给 Shell 解析" : "Return · 执行命令") : "Return · 发送给 Echo")
-                if completion != nil { Text("· Tab 补全  ↑↓ \(completionIndex + 1)/\(completions.count)") }
+                if completion != nil { Text("· → 接受预览") }
+                if !completionCandidates.isEmpty { Text("· Tab 历史候选") }
             }
-        }.font(.system(size: 10)).foregroundStyle(theme.muted).fixedSize().help("⌘Return 强制执行命令 · ⌥Return 强制提问 · ⇧Return 换行")
+        }.font(.system(size: 10)).foregroundStyle(theme.muted).fixedSize(horizontal: false, vertical: true).help("↑↓ 按已输入前缀查历史 · Tab 展示历史候选 · → 在行尾接受预览 · 菜单内 → 或 Return 只补全，不执行")
     }
     private var assistantMode: Binding<AssistantMode> { Binding(get: { assistant.mode(for: session) }, set: { assistant.setMode($0, session: session) }) }
     private func submit(_ forced: InputRoute? = nil) {
-        if assistant.submitInput(session: session, forced: forced) { completions = []; completionIndex = 0 }
+        if assistant.submitInput(session: session, forced: forced) { completions = [] }
     }
     private func updateCompletions() {
-        completionTask?.cancel(); completions = []; completionIndex = 0
+        completionTask?.cancel(); completions = []
         assessment = session.commandCatalog.assess(session.draft, directory: session.directory)
         let draft = session.draft, catalog = session.commandCatalog, directory = session.directory
         guard draft.utf8.count <= 4_000 else { return }
-        let history = session.blocks.filter { !$0.isAI && !$0.isDemo }.map(\.command)
+        let history = commandHistory
         completionTask = Task { @MainActor in
             do { try await Task.sleep(nanoseconds: 55_000_000) } catch { return }
             let next = await Task.detached(priority: .userInitiated) { catalog.completions(for: draft, directory: directory, history: history) }.value

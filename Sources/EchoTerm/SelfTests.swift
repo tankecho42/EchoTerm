@@ -171,6 +171,8 @@ import AppKit
             try await AISelfTests.network(check: check)
             try await InteractionSelfTests.run(check: check)
             try await UnifiedInputSelfTests.run(check: check)
+            HistoryNavigationSelfTests.run(check: check)
+            await CompletionInputSelfTests.run(check: check)
             try await TabFlowSelfTests.run(check: check)
             try await InteractiveTerminalSelfTests.run(check: check)
             try await WindowCommandInputSelfTests.run(check: check)

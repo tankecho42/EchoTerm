@@ -1,3 +1,16 @@
+# 0.11.3 verification
+
+2026-10-20, Apple Silicon. Local deterministic fixtures only; production app, active shells, provider keys and settings were not replaced.
+
+- `./scripts/test.sh --network`: **743 / 743 passed**. The targeted history/editor runner separately passed **65 / 65**. Debug and optimized Release builds completed without warnings; final Release build took 32.85 seconds.
+- Pure session checks cover frozen-prefix history navigation, original-draft restoration, manual edits, same-value binding writes, Unicode, no matches, duplicate time order, AI/demo exclusions and submission/clear reset. Catalog checks verify newest-first deduplication, literal full prefixes and single-line candidates without shell evaluation.
+- AppKit editor checks exercise end/middle/selection/IME Right handling, ordinary arrows with ghost text visible, upper/lower menu ordering and clamp boundaries, Return with all modifier combinations, Escape, no-match/empty-prefix menus, multiline Tab, focus loss, outside clicks, disabled editors and repeated child-window cleanup. Registered Return shortcuts have a positive control; actual `NSApp.sendEvent` with menu open confirms they cannot execute before completion acceptance. Eligibility fixtures simulate key-window status and do not claim actual OS activation.
+- Final Release QA used a separate bundle/defaults identity with **39 matching Mach-O code/data sections**. Three actual commands were executed: `echo final-first`, `echo final-second`, `echo final-first`. Starting with `echo final-`, Up/Up/Down/Down produced first/second/first/original-prefix. Tab visually showed only two commands, newest nearest the caret, without moving editor focus. Down+Return filled second; end-Right and Tab+CommandShiftReturn filled first. The block count remained **3** throughout these completion actions; nothing executed. QA exited normally.
+- The earlier candidate, before only synchronous main-queue actor annotations changed, also verified middle-Right with `eXcho nav-one`, mouse acceptance while retaining editor focus and block count 8, CommandReturn, and Escape preserving the draft. Actual final-copy checks are distinguished above. Upper-menu visual order is covered by production-component tests; no actual upper-placement capture is claimed.
+- Final package: **0.11.3 / build 25**, arm64, macOS 14+, **39 / 39 independent static checks passed**. ZIP **5522337 bytes**, SHA-256 `733d667bbbb096d7ada12748be4ca6416c9181f0dece78304532bab09c5ed0fa`. Extraction, strict actual/extracted ad-hoc signing, exact file/resource/permission equality and all three dependency licenses passed. Apple notarization and downloaded Gatekeeper acceptance are outside this verification.
+
+---
+
 # 0.11.2 verification
 
 2026-10-20, Apple Silicon. Local deterministic API/PTY fixtures and an isolated QA application; no live paid-model calls. Production app, active shells and provider settings were not replaced.

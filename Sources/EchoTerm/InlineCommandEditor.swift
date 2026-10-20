@@ -15,8 +15,8 @@ struct InlineCommandEditor: NSViewRepresentable {
     var explicitFocus = false
     var focusOwnerID: UUID? = nil
     var completion: String? = nil
+    var completionCandidates: [String] = []
     var commandAssessment: CommandAssessment? = nil
-    var onCycleCompletion: ((Int) -> String?)? = nil
     var onForcedSubmit: ((InputRoute) -> Void)? = nil
     var onSubmit: () -> Void
     var onHistory: (Int) -> Void
@@ -57,7 +57,7 @@ struct InlineCommandEditor: NSViewRepresentable {
         guard let view = scroll.documentView as? CommandTextView else { return }
         context.coordinator.parent = self
         view.onSubmit = onSubmit; view.onHistory = onHistory; view.onFocus = onFocus; view.onCancel = onCancel
-        view.completion = completion; view.onCycleCompletion = onCycleCompletion; view.onForcedSubmit = onForcedSubmit
+        view.completion = completion; view.completionCandidates = completionCandidates; view.onForcedSubmit = onForcedSubmit
         let styleChanged = context.coordinator.styledFont != font || context.coordinator.styledColor != color
         if styleChanged {
             if view.font != font { view.font = font }
@@ -66,6 +66,7 @@ struct InlineCommandEditor: NSViewRepresentable {
         if view.insertionPointColor != caret { view.insertionPointColor = caret }
         let canEdit = enabled && environmentEnabled
         let canFocus = automaticallyFocus && canEdit
+        if !canEdit { view.dismissCompletionMenu() }
         if view.isEditable != canEdit { view.isEditable = canEdit }
         view.allowsAutomaticFocus = canFocus
         if !canFocus, let window = view.window, window.firstResponder === view {
@@ -74,6 +75,7 @@ struct InlineCommandEditor: NSViewRepresentable {
         view.focusOwnerID = focusOwnerID
         if styleChanged { view.typingAttributes = [.font: font, .foregroundColor: color] }
         if view.string != text && !view.hasMarkedText() {
+            view.dismissCompletionMenu()
             view.string = text
             view.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             context.coordinator.measure(view)
@@ -90,12 +92,13 @@ struct InlineCommandEditor: NSViewRepresentable {
             }
         }
         view.needsDisplay = true
-        view.setAccessibilityHelp(completion.map { "补全：\($0)。Tab 接受，上下切换。" } ?? "Return 提交；Command Return 强制执行；Option Return 询问 AI。")
+        view.setAccessibilityHelp(completion.map { "右箭头接受灰色补全：\($0)。Tab 显示历史候选；上下键浏览匹配历史。" } ?? "Tab 显示历史候选；上下键浏览匹配历史；Return 提交；Command Return 强制执行；Option Return 询问 AI。")
         context.coordinator.requestFocus(view)
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
         guard let view = scroll.documentView as? CommandTextView else { return }
         view.allowsAutomaticFocus = false
+        view.dismissCompletionMenu()
         view.onFocusEligibilityChanged = nil
         if let window = view.window, window.firstResponder === view { window.makeFirstResponder(nil) }
     }
@@ -158,7 +161,8 @@ final class CommandTextView: NSTextView {
     private var keyWindowObserver: NSObjectProtocol?
     var allowsAutomaticFocus = true
     var completion: String?
-    var onCycleCompletion: ((Int) -> String?)?
+    var completionCandidates: [String] = [] { didSet { if oldValue != completionCandidates { dismissCompletionMenu() } } }
+    let completionMenu = CompletionMenuController()
     var onForcedSubmit: ((InputRoute) -> Void)?
     private var canComplete: Bool {
         guard let completion else { return false }
@@ -166,7 +170,7 @@ final class CommandTextView: NSTextView {
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard canComplete, let completion, let font, let window else { return }
+        guard !completionMenu.isOpen, canComplete, let completion, let font, let window else { return }
         let screen = firstRect(forCharacterRange: selectedRange(), actualRange: nil)
         let point = convert(window.convertFromScreen(screen), from: nil).origin
         let suffix = String(completion.dropFirst(string.count))
@@ -188,6 +192,7 @@ final class CommandTextView: NSTextView {
     }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        dismissCompletionMenu()
         if let keyWindowObserver { NotificationCenter.default.removeObserver(keyWindowObserver); self.keyWindowObserver = nil }
         if let window {
             keyWindowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,
@@ -203,8 +208,69 @@ final class CommandTextView: NSTextView {
         if result { onFocus?() }
         return result
     }
+    override func resignFirstResponder() -> Bool {
+        dismissCompletionMenu()
+        return super.resignFirstResponder()
+    }
+    override func didChangeText() {
+        dismissCompletionMenu()
+        super.didChangeText()
+    }
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        dismissCompletionMenu()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+    func dismissCompletionMenu() { completionMenu.close(); needsDisplay = true }
+    func showHistoryCompletionMenu(placement: CompletionMenuPlacement? = nil) {
+        guard isEditable, !hasMarkedText(), !string.contains("\n"), selectedRange().length == 0,
+              selectedRange().location == (string as NSString).length,
+              let window, window.isKeyWindow, window.firstResponder === self else { return }
+        let prefix = string
+        var seen: Set<String> = []
+        let candidates = completionCandidates.filter { $0 != prefix && $0.hasPrefix(prefix) && seen.insert($0).inserted }
+        completionMenu.show(candidates: candidates, for: self, placementOverride: placement,
+                            onKey: { [weak self] in self?.handleCompletionMenuKey($0) ?? false },
+                            onAccept: { [weak self] in self?.acceptHistoryCompletion($0, prefix: prefix) },
+                            onClose: { [weak self] in self?.needsDisplay = true })
+        needsDisplay = true
+    }
+    private func acceptHistoryCompletion(_ candidate: String, prefix: String) {
+        guard isEditable, !hasMarkedText(), string == prefix, candidate != prefix,
+              selectedRange().length == 0, selectedRange().location == (string as NSString).length,
+              candidate.hasPrefix(prefix), completionCandidates.contains(candidate),
+              let window, window.isKeyWindow, window.firstResponder === self else { return }
+        insertText(candidate, replacementRange: NSRange(location: 0, length: (string as NSString).length))
+    }
+    @discardableResult func handleCompletionMenuKey(_ event: NSEvent) -> Bool {
+        guard completionMenu.isOpen else { return false }
+        guard isEditable, !hasMarkedText(), selectedRange().length == 0,
+              selectedRange().location == (string as NSString).length,
+              let window, event.window === window, window.isKeyWindow, window.firstResponder === self else {
+            dismissCompletionMenu(); return false
+        }
+        // Return is a confirmation even with Command/Option/Shift held. The
+        // panel's scoped event monitor reaches this before app menu shortcuts.
+        if event.keyCode == 36 || event.keyCode == 76 { completionMenu.acceptSelection(); return true }
+        if event.keyCode == 53 { dismissCompletionMenu(); return true }
+        if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+            switch event.keyCode {
+            case 124: completionMenu.acceptSelection(); return true
+            case 126: completionMenu.moveVisually(-1); return true
+            case 125: completionMenu.moveVisually(1); return true
+            case 48: return true
+            default: break
+            }
+        }
+        dismissCompletionMenu()
+        return false
+    }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if completionMenu.isOpen && (event.keyCode == 36 || event.keyCode == 76), handleCompletionMenuKey(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
     override func keyDown(with event: NSEvent) {
-        guard isEditable else { return }
+        guard isEditable else { dismissCompletionMenu(); return }
+        if handleCompletionMenuKey(event) { return }
         if !hasMarkedText() {
             if event.keyCode == 36 || event.keyCode == 76 {
                 if event.modifierFlags.contains(.command), let onForcedSubmit { onForcedSubmit(.shell) }
@@ -214,16 +280,15 @@ final class CommandTextView: NSTextView {
                 return
             }
             if event.modifierFlags.contains(.control), event.charactersIgnoringModifiers == "c" { onCancel?(); return }
-            if !string.contains("\n") && event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
-                if event.keyCode == 48, canComplete, let completion {
+            if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+                if event.keyCode == 124, canComplete, let completion {
                     insertText(completion, replacementRange: NSRange(location: 0, length: (string as NSString).length)); return
                 }
-                if canComplete, let onCycleCompletion {
-                    if event.keyCode == 126 { completion = onCycleCompletion(-1); needsDisplay = true; return }
-                    if event.keyCode == 125 { completion = onCycleCompletion(1); needsDisplay = true; return }
+                if event.keyCode == 48, !string.contains("\n") { showHistoryCompletionMenu(); return }
+                if !string.contains("\n") {
+                    if event.keyCode == 126 { onHistory?(-1); return }
+                    if event.keyCode == 125 { onHistory?(1); return }
                 }
-                if event.keyCode == 126 { onHistory?(-1); return }
-                if event.keyCode == 125 { onHistory?(1); return }
             }
         }
         super.keyDown(with: event)

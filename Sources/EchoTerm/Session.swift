@@ -37,7 +37,11 @@ final class TerminalSession: ObservableObject, Identifiable {
     let id = UUID()
     @Published var blocks: [CommandBlock] = []
     @Published var directory: String
-    @Published var draft = ""
+    @Published var draft = "" {
+        didSet {
+            if oldValue != draft && !recallingHistory { resetHistoryNavigation() }
+        }
+    }
     @Published var defaultInputRoute: InputRoute = .automatic
     @Published var defaultAssistantMode: AssistantMode?
     @Published var inputRouteOverride: InputRoute?
@@ -94,8 +98,13 @@ final class TerminalSession: ObservableObject, Identifiable {
     private let loadShellConfig: Bool
     private let environmentOverrides: [String: String]
     private var capturing = false
-    private var historyIndex: Int?
-    private var draftBeforeHistory = ""
+    private struct HistoryNavigation {
+        let originalDraft: String
+        let commands: [String]
+        var index: Int
+    }
+    private var historyNavigation: HistoryNavigation?
+    private var recallingHistory = false
     private let snapshotDelegate = SnapshotDelegate()
     private var recording: Terminal?
     private var outputCount = 0
@@ -163,12 +172,13 @@ final class TerminalSession: ObservableObject, Identifiable {
                 payload = #"builtin eval -- "$(<"$ECHOTERM_COMMAND_FILE")""#
             } catch { insertionError = error.localizedDescription; return nil }
         }
+        resetHistoryNavigation()
         blocks.append(CommandBlock(command: command, directory: directory, assistantRunID: owner))
         if readingAnchorID == nil { selectedBlockID = blocks.last?.id }
         runningBlockID = blocks.last?.id
         if owner != nil { agentBlockID = blocks.last?.id }
         trimBlocks()
-        running = true; capturing = true; draft = ""; historyIndex = nil; liveOutput = ""; interactiveView = true
+        running = true; capturing = true; draft = ""; liveOutput = ""; interactiveView = true
         nativeInputRevision = 0; nativeControlActive = false
         terminal.resumeNormalOutputFollowing()
         recording = makeRecording()
@@ -259,15 +269,36 @@ final class TerminalSession: ObservableObject, Identifiable {
         if let bootstrap { try? FileManager.default.removeItem(at: bootstrap) }
     }
     deinit { if let bootstrap { try? FileManager.default.removeItem(at: bootstrap) } }
-    func clear() { resumeInput(); blocks.removeAll { $0.exitCode != nil }; selectedBlockID = runningBlockID; terminal.feed(text: "\u{1b}[3J\u{1b}[2J\u{1b}[H"); if !running { terminal.send(txt: "\u{0c}") }; focus() }
+    func clear() { resetHistoryNavigation(); resumeInput(); blocks.removeAll { $0.exitCode != nil }; selectedBlockID = runningBlockID; terminal.feed(text: "\u{1b}[3J\u{1b}[2J\u{1b}[H"); if !running { terminal.send(txt: "\u{0c}") }; focus() }
     func history(_ direction: Int) {
-        let commands = blocks.filter { !$0.isDemo && !$0.isAI }.map(\.command)
+        guard direction != 0 else { return }
+        if var navigation = historyNavigation {
+            let next = navigation.index + (direction < 0 ? -1 : 1)
+            guard next >= 0 else { return }
+            if next >= navigation.commands.count {
+                resetHistoryNavigation()
+                recallHistoryDraft(navigation.originalDraft)
+            } else {
+                navigation.index = next
+                historyNavigation = navigation
+                recallHistoryDraft(navigation.commands[next])
+            }
+            return
+        }
+        // Down alone must leave a partly written command untouched. The first
+        // Up freezes its prefix and matching timeline, including duplicates.
+        guard direction < 0 else { return }
+        let commands = blocks.filter { !$0.isDemo && !$0.isAI && !$0.command.isEmpty && $0.command.hasPrefix(draft) }.map(\.command)
         guard !commands.isEmpty else { return }
-        if historyIndex == nil { draftBeforeHistory = draft }
-        let next = (historyIndex ?? commands.count) + direction
-        if next >= commands.count { historyIndex = nil; draft = draftBeforeHistory }
-        else { historyIndex = max(0, next); draft = commands[max(0, next)] }
+        historyNavigation = HistoryNavigation(originalDraft: draft, commands: commands, index: commands.count - 1)
+        recallHistoryDraft(commands[commands.count - 1])
     }
+    private func recallHistoryDraft(_ text: String) {
+        recallingHistory = true
+        defer { recallingHistory = false }
+        draft = text
+    }
+    private func resetHistoryNavigation() { historyNavigation = nil }
     private func receive(_ event: ShellStreamParser.Event) {
         switch event {
         case .began(let command):

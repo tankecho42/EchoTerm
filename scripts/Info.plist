@@ -6,8 +6,8 @@
 <key>CFBundleIdentifier</key><string>app.echoterm.desktop</string>
 <key>CFBundleExecutable</key><string>EchoTerm</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.11.2</string>
-<key>CFBundleVersion</key><string>24</string>
+<key>CFBundleShortVersionString</key><string>0.11.3</string>
+<key>CFBundleVersion</key><string>25</string>
 <key>CFBundleIconFile</key><string>EchoTerm</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>

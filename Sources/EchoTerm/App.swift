@@ -43,6 +43,21 @@ import SwiftUI
     var window: NSWindow!
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        if CommandLine.arguments.contains("--self-test-completion") {
+            Task { @MainActor in
+                var failures = 0, total = 0
+                let check: (Bool, String) -> Void = { passed, name in
+                    print("\(passed ? "PASS" : "FAIL") \(name)")
+                    total += 1
+                    if !passed { failures += 1 }
+                }
+                HistoryNavigationSelfTests.run(check: check)
+                await CompletionInputSelfTests.run(check: check)
+                print("Completion: \(total - failures)/\(total) checks passed; \(failures) failures")
+                exit(failures == 0 ? 0 : 1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--self-test-selection") {
             Task { @MainActor in
                 var failures = 0

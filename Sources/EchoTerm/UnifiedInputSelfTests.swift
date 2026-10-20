@@ -23,6 +23,11 @@ import Foundation
         check(quoted.count == 3 && quoted[1].value == "/tmp/a b" && quoted[2].value == "x y", "Classifier understands assignments, quotes and escaped spaces")
         let completion = catalog.completions(for: "gi", directory: root.path, history: ["git status", "git diff", "git status"])
         check(completion.first == "git status" && completion.contains("git") && Set(completion).count == completion.count, "Completion combines recent history and executable names without duplicates")
+        let history = ["git status", "git diff", "echo other", "git status", "git log", "git"]
+        check(ShellCommandCatalog.historyCompletions(for: "git", history: history) == ["git log", "git status", "git diff"], "History menu deduplicates full commands by their latest occurrence and excludes an exact draft")
+        check(ShellCommandCatalog.historyCompletions(for: "", history: history) == ["git", "git log", "git status", "echo other", "git diff"], "An empty prefix lists distinct history newest-first without a catalog-name fallback")
+        check(ShellCommandCatalog.historyCompletions(for: "echo 你", history: ["echo 你好🙂", "echo nope", "echo 你 later", "Echo 你好"]) == ["echo 你 later", "echo 你好🙂"], "History menu uses the literal full Unicode prefix and preserves case and spacing")
+        check(ShellCommandCatalog.historyCompletions(for: "git ", history: ["git\nstatus", "git status", "git "]) == ["git status"] && ShellCommandCatalog.historyCompletions(for: "git\ns", history: history).isEmpty, "Single-line history candidates never insert a multiline command through the menu")
         check(catalog.completions(for: "cat hel", directory: root.path, history: []).contains("cat hello\\ world.txt"), "File completion escapes spaces instead of introducing another argument")
         check(catalog.completions(for: "cat 'hel", directory: root.path, history: []).contains("cat 'hello world.txt'"), "File completion preserves and closes a quoted prefix")
         check(catalog.completions(for: "cd fol", directory: root.path, history: []).contains("cd folder/"), "Directory completion retains the slash for continuing a path")
