@@ -30,13 +30,18 @@ struct TerminalPane: View {
     private var completion: String? { completions.first }
     private var commandHistory: [String] { session.blocks.filter { !$0.isAI && !$0.isDemo }.map(\.command) }
     private var completionCandidates: [String] { ShellCommandCatalog.historyCompletions(for: session.draft, history: commandHistory) }
+    private var showsAgentContext: Bool {
+        assistant.thinking.contains(session.id) || session.inputRoute == .assistant ||
+        (!session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && route == .assistant)
+    }
     var body: some View {
         let latestAIBlockID = session.blocks.last(where: \.isAI)?.id
+        let contextDisplay = showsAgentContext ? AgentContextDisplay(selection: assistant.contextSelection(for: session), blocks: session.blocks) : nil
         return VStack(spacing: 0) {
             if isSplit { paneHeader }
             GeometryReader { viewport in
                 if session.presentsInteractiveTerminal {
-                    interactiveTerminal(viewportHeight: viewport.size.height)
+                    interactiveTerminal(viewportHeight: viewport.size.height, contextDisplay: contextDisplay)
                         .frame(width: viewport.size.width, height: viewport.size.height)
                 } else {
                     ScrollViewReader { reader in
@@ -45,6 +50,12 @@ struct TerminalPane: View {
                                 LazyVStack(spacing: 0) {
                                     ForEach(Array(session.blocks.enumerated()), id: \.element.id) { index, block in
                                         VStack(spacing: 0) {
+                                            if let contextDisplay, contextDisplay.selection.isSharingEnabled,
+                                               contextDisplay.selection.firstBlockID == block.id {
+                                                AgentContextBoundary(display: contextDisplay, theme: theme,
+                                                                     enabled: !workspace.inputBlockedByModal && !session.exited,
+                                                                     shift: { shiftContextBoundary($0, reader: reader) })
+                                            }
                                             if block.isAI {
                                                 InlineAIBlock(block: block, index: index, showsAvatar: block.id == latestAIBlockID, session: session, assistant: assistant, workspace: workspace, preferences: preferences)
                                             } else {
@@ -65,6 +76,11 @@ struct TerminalPane: View {
                                 }
                                 // Keep the current editor mounted when historical blocks are offscreen.
                                 if assistant.canStartBlock(in: session) && !session.exited { inputBlock.id(session.inputBlockID) }
+                                if let contextDisplay {
+                                    contextControl(contextDisplay).padding(.leading, 39).padding(.trailing, 16)
+                                        .padding(.top, 1).padding(.bottom, 18)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                                 if session.exited || session.shellError != nil {
                                     HStack { Text(session.shellError ?? "Shell 会话已结束"); Spacer(); Button("新建会话") { workspace.addTab(directory: session.directory) } }.font(.system(size: 11)).padding(20).foregroundStyle(theme.muted)
                                 }
@@ -156,7 +172,7 @@ struct TerminalPane: View {
             updateCompletions()
         }
     }
-    private func interactiveTerminal(viewportHeight: CGFloat) -> some View {
+    private func interactiveTerminal(viewportHeight: CGFloat, contextDisplay: AgentContextDisplay?) -> some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -167,6 +183,7 @@ struct TerminalPane: View {
                     Text(auxiliaryInputVisible ? "辅助输入" : "键盘输入").foregroundStyle(theme.muted)
                         .fixedSize(horizontal: true, vertical: false)
                 }
+                if let contextDisplay { contextControl(contextDisplay) }
                 HStack(spacing: 12) {
                     Button(auxiliaryInputTitle) {
                         if auxiliaryInputVisible { returnToKeyboard() }
@@ -310,6 +327,22 @@ struct TerminalPane: View {
     private var inputMayAutomaticallyFocus: Bool {
         active && session.ready && !session.exited && session.readingAnchorID == nil &&
         !workspace.assistantWantsFocus && !workspace.inputBlockedByModal && !session.showSearch
+    }
+    private func contextControl(_ display: AgentContextDisplay) -> some View {
+        AgentContextControl(display: display, theme: theme, enabled: !workspace.inputBlockedByModal && !session.exited,
+                            setStart: { _ = assistant.setContextStart(index: $0, for: session) },
+                            shift: shiftContextBoundary,
+                            openSettings: { workspace.showSettings = true })
+    }
+    private func shiftContextBoundary(_ delta: Int) { _ = assistant.shiftContextBoundary(by: delta, for: session) }
+    private func shiftContextBoundary(_ delta: Int, reader: ScrollViewProxy) {
+        guard assistant.shiftContextBoundary(by: delta, for: session), let firstID = session.contextStartBlockID else { return }
+        followBottom = false
+        Task { @MainActor in
+            await Task.yield()
+            guard session.contextStartBlockID == firstID, !assistant.thinking.contains(session.id) else { return }
+            reader.scrollTo(firstID, anchor: .top)
+        }
     }
     private var inputHint: some View {
         HStack(spacing: 7) {

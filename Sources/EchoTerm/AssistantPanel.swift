@@ -84,13 +84,18 @@ struct AssistantBubble: View {
             }
             if let error = session.insertionError { Text(error).font(.system(size: 10)).foregroundStyle(theme.muted) }
             Divider().opacity(0.35)
+            AgentContextControl(display: AgentContextDisplay(selection: assistant.contextSelection(for: session, question: contextualQuestion(draft.wrappedValue)), blocks: session.blocks),
+                                theme: theme, enabled: !workspace.inputBlockedByModal && !session.exited,
+                                setStart: { _ = assistant.setContextStart(index: $0, for: session) },
+                                shift: { _ = assistant.shiftContextBoundary(by: $0, for: session) },
+                                openSettings: { workspace.showSettings = true })
             HStack(alignment: .bottom, spacing: 9) {
                 TextField("问一句…", text: draft, axis: .vertical).textFieldStyle(.plain).font(.system(size: 12)).lineLimit(1...4).focused($inputFocused).onSubmit(send)
                     .disabled(!assistant.canStartBlock(in: session))
                 Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 11, weight: .medium)).frame(width: 24, height: 24).background(theme.accent.opacity(0.12)).clipShape(Circle()) }.buttonStyle(.plain).foregroundStyle(theme.accent).disabled(!assistant.canStartBlock(in: session) || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             HStack(spacing: 5) {
-                Button { preferences.shareContext.toggle() } label: { Label(preferences.shareContext ? "附带区块概览" : "不附带终端内容", systemImage: preferences.shareContext ? "link" : "lock") }.buttonStyle(.plain)
+                Button { preferences.shareContext.toggle() } label: { Label(preferences.shareContext ? "附带终端上下文" : "不附带终端内容", systemImage: preferences.shareContext ? "link" : "lock") }.buttonStyle(.plain)
                 Spacer()
                 Text(providers.selected.model.isEmpty ? "未连接模型" : providers.selected.effort.title).help(providers.selected.name)
             }.font(.system(size: 9)).foregroundStyle(theme.muted)

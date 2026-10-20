@@ -1,3 +1,17 @@
+# 0.11.4 verification
+
+2026-10-20, Apple Silicon. Local deterministic fixtures only; production app, active shells, provider keys and settings were not replaced.
+
+- `./scripts/test.sh --network`: **778 / 778 passed**. Targeted `--self-test-context`: **35 / 35 passed**. Debug and optimized Release builds completed without warnings; Release took 37.07 seconds.
+- Tests cover actual two-turn transport replay for “好的”, stored original questions, suggestions and restored answers; continuation-only protocol framing; all three protocol request envelopes; UUID range/pruning/demo gaps; exact frozen first-request estimates; excluded read/list/jump protection; opt-out; full new instructions; redaction before clipping; bounded historical payloads; quick-intent/naming range and pending-request cancellation.
+- A 300-Block preview benchmark measured 22.8 ms/build in Debug after linear byte accounting (10 builds, observation only). Historical messages plus the overview have a 96 KB serialized budget; the full redacted new question is retained in addition. Token estimates use actual serialized selected content and omit provider system/tool overhead and subsequent tool results.
+- Actual CUA checks used a private QA bundle/defaults identity with **39 matching Mach-O code/data sections**. Two real `printf` commands created distinct old/new records. A real local HTTP round trip for “好的” received the original user question immediately followed by the previous assistant offer and continued it. Slider adjustment changed **Block 1–4 / ≈384 tokens** to **Block 2–4 / ≈320 tokens**; the following actual request contained only the new Shell marker. Boundary arrows changed **1–5 / ≈435** to **2–5 / ≈371** and preserved the draft. An eight-second local request exposed a frozen range and disabled slider/arrows. Bubble opt-out sent only `system,user` with no historical context. A second split displayed independent empty history. QA exited normally.
+- Screenshot capture returned tiny low-information white images, so pixel-level layout and contrast were not verified. Functional controls, focus, split state and outgoing payloads were checked through the actual native accessibility tree and local HTTP fixture.
+- Final package: **0.11.4 / build 26**, arm64, macOS 14+, **39 / 39 independent static checks passed**. ZIP **5627607 bytes**, SHA-256 `85fce27b0f4f7b7364b2b71d8e7696b47768fc2f72612a33c14e24f1017c36fa`. Strict actual/extracted ad-hoc signing, exact bytes/resources/permissions and all three dependency licenses passed. Real-provider behavior, Apple notarization and downloaded Gatekeeper acceptance were outside these checks.
+- The full suite exposed an old normal-title fixture timing race against its 120 ms deadline. The unnecessary normal-case artificial delay was removed; the dedicated delayed-response cancellation, timeout and manual-title assertions remain and passed in the final full run.
+
+---
+
 # 0.11.3 verification
 
 2026-10-20, Apple Silicon. Local deterministic fixtures only; production app, active shells, provider keys and settings were not replaced.

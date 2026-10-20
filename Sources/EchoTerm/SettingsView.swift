@@ -102,7 +102,7 @@ struct SettingsView: View {
             EchoLabeledChoice(title: "Provider", selection: $providers.selectedID, choices: providers.configurations.map { .init(value: $0.id, title: $0.name) })
             ProviderEditor(config: providers.selected, providers: providers, usage: usage).id(providers.selectedID)
             Rectangle().fill(theme.line).frame(height: 1)
-            Toggle(isOn: $preferences.shareContext) { VStack(alignment: .leading, spacing: 5) { Text("附带终端上下文").font(.system(size: 12)); Text("提问时发送所有会话的区块概览，正文按需读取；查找历史优先使用内部区块工具。常见密钥格式会尝试脱敏。").font(.system(size: 10)).foregroundStyle(theme.muted) } }.toggleStyle(EchoToggleStyle()).controlSize(.small)
+            Toggle(isOn: $preferences.shareContext) { VStack(alignment: .leading, spacing: 5) { Text("附带终端上下文").font(.system(size: 12)); Text("提问时附带当前会话所选 Block 的对话与命令结果，可在 AI 输入旁调整起点。长内容会截断；其他会话仅按需通过工具查阅。常见密钥格式会尝试脱敏。").font(.system(size: 10)).foregroundStyle(theme.muted) } }.toggleStyle(EchoToggleStyle()).controlSize(.small)
             Text("Codex 模型通过 Responses API 接入；Claude 通过 Messages API 接入。Codex CLI 和 Claude Code 可以直接在终端中运行，当前不接管它们的登录会话。").font(.system(size: 10)).lineSpacing(4).foregroundStyle(theme.muted)
         }
     }

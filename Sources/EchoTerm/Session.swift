@@ -37,6 +37,20 @@ final class TerminalSession: ObservableObject, Identifiable {
     let id = UUID()
     @Published var blocks: [CommandBlock] = []
     @Published var directory: String
+    /// Stable UUID boundary for the current session's automatic AI context.
+    /// Nil includes all retained non-demo blocks. Remember excluded identities
+    /// so deleting the anchor cannot accidentally re-include older blocks.
+    @Published var contextStartBlockID: UUID? {
+        didSet {
+            let eligible = blocks.filter { !$0.isDemo }
+            if let id = contextStartBlockID {
+                if let index = eligible.firstIndex(where: { $0.id == id }) {
+                    contextExcludedBlockIDs = Set(eligible.prefix(index).map(\.id))
+                } else { contextExcludedBlockIDs = Set(eligible.map(\.id)) }
+            } else { contextExcludedBlockIDs = [] }
+        }
+    }
+    private(set) var contextExcludedBlockIDs: Set<UUID> = []
     @Published var draft = "" {
         didSet {
             if oldValue != draft && !recallingHistory { resetHistoryNavigation() }

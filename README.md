@@ -1,6 +1,6 @@
 # EchoTerm
 
-命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.3**。
+命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.4**。
 
 ![EchoTerm](promo/v10-en/output/EchoTerm-Promo-English-v10-poster.png)
 
@@ -38,6 +38,14 @@
 swift test                     # XCTest 测试（需要完整 Xcode）
 ./scripts/run.sh --demo         # 展示明确标识的示例 AI 气泡，终端仍是真实 shell
 ```
+
+## 0.11.4 的主要变化
+
+- 连续提问会直接附带所选 Block 中的提问、回答与命令结果。“好的”“继续”能接上上一轮回答，工具续答不会变成重复的用户问题。
+- AI 输入旁显示当前会话的上下文 Block 范围和估算 token 数，点击后可用滑条调整最早纳入的 Block。
+- 最早纳入的 Block 上方显示上下文边界，使用上、下箭头扩大或缩小范围；范围变化与实际请求使用同一份内容。
+- 正在执行的请求固定上下文范围，关闭上下文分享时不附带历史内容；长内容有上限并标明截断。token 为附带内容的估算，不等同于模型计费。
+- 可选的快速意图和 AI 命名也遵守各会话所选历史范围；它们的独立请求不计入对话输入旁的 token 估算。
 
 ## 0.11.3 的主要变化
 

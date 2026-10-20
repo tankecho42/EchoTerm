@@ -43,6 +43,34 @@ import SwiftUI
     var window: NSWindow!
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        if CommandLine.arguments.contains("--self-test-tab-flow") {
+            Task { @MainActor in
+                var failures = 0, total = 0
+                let check: (Bool, String) -> Void = { passed, name in
+                    print("\(passed ? "PASS" : "FAIL") \(name)"); total += 1
+                    if !passed { failures += 1 }
+                }
+                do { try await TabFlowSelfTests.run(check: check) }
+                catch { check(false, "unexpected error: \(error)") }
+                print("Tab flow: \(total - failures)/\(total) checks passed; \(failures) failures")
+                exit(failures == 0 ? 0 : 1)
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--self-test-context") {
+            Task { @MainActor in
+                var failures = 0, total = 0
+                do {
+                    try await AgentContextSelfTests.run { passed, name in
+                        print("\(passed ? "PASS" : "FAIL") \(name)")
+                        total += 1; if !passed { failures += 1 }
+                    }
+                } catch { failures += 1; print("FAIL context fixture: \(error)") }
+                print("Context: \(total - failures)/\(total) checks passed; \(failures) failures")
+                exit(failures == 0 ? 0 : 1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--self-test-completion") {
             Task { @MainActor in
                 var failures = 0, total = 0

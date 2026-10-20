@@ -43,6 +43,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
     private var runMeters: [UUID: (meter: AIRoundMeter, model: String)] = [:]
     private var activeReplies: [UUID: UUID] = [:]
     private var sessions: [UUID: TerminalSession] = [:]
+    private var contextRuns: [UUID: AgentContextPayload] = [:]
     private var staged: [UUID: UUID] = [:]
     private var observers: Set<AnyCancellable> = []
     private let transport: AITransport
@@ -84,6 +85,32 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         intentPreviews[session.id] = nil; inputDrafts[session.id] = nil; lastIntentBlock[session.id] = nil
     }
     func messages(for session: TerminalSession) -> [ChatMessage] { conversations[session.id] ?? [] }
+    func contextSelection(for session: TerminalSession, question: String? = nil) -> AgentContextSelection {
+        if let run = runs[session.id], let payload = contextRuns[run] {
+            var frozen = payload.selection; frozen.isFrozen = true; return frozen
+        }
+        return AgentContextBuilder.build(session: session, sessions: indexedSessions(fallback: session), conversations: messages(for: session),
+                                         question: question ?? session.draft, sharing: preferences.shareContext).selection
+    }
+    @discardableResult func setContextStart(index: Int, for session: TerminalSession) -> Bool {
+        let blocks = session.blocks.enumerated().filter { !$0.element.isDemo }
+        guard preferences.shareContext, !thinking.contains(session.id), !blocks.isEmpty else { return false }
+        return setContextStart(blockID: (blocks.first { $0.offset + 1 >= index } ?? blocks[blocks.count - 1]).element.id, for: session)
+    }
+    @discardableResult func setContextStart(blockID: UUID?, for session: TerminalSession) -> Bool {
+        guard preferences.shareContext, !thinking.contains(session.id),
+              blockID == nil || session.blocks.contains(where: { !$0.isDemo && $0.id == blockID }) else { return false }
+        session.contextStartBlockID = blockID
+        cancelIntent(session.id)
+        session.onActivity?()
+        return true
+    }
+    @discardableResult func shiftContextBoundary(by delta: Int, for session: TerminalSession) -> Bool {
+        let current = contextSelection(for: session)
+        guard current.eligibleCount > 0 else { return false }
+        let position = max(1, min(current.eligibleCount, current.startEligibleIndex1 + delta))
+        return setContextStart(index: current.availableIndices[position - 1], for: session)
+    }
     func canStartBlock(in session: TerminalSession) -> Bool {
         !session.running && session.agentOwner == nil && !thinking.contains(session.id)
     }
@@ -141,8 +168,12 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         }
         let config = providers.selected, streaming = preferences.streamReplies
         let meter = AIRoundMeter(); runMeters[run] = (meter, config.model)
-        // Prior turns are retrieved through the block catalog instead of replaying their entire output.
-        var history: [[String: Any]] = [["role": "user", "content": ContextRedactor.redact(question)]]
+        let contextPayload = AgentContextBuilder.build(session: session, sessions: indexedSessions(fallback: session), conversations: messages(for: session),
+                                                      question: question, sharing: preferences.shareContext, excludingReplyID: replyID)
+        // Replay plain bounded history, never orphaned provider-native tool calls.
+        // UUID scope is frozen for this run; only its own new blocks may grow it.
+        contextRuns[run] = contextPayload
+        var history = contextPayload.messages
         let limit = max(1, min(24, preferences.agentStepLimit)), timeout = max(1, preferences.commandTimeout)
         conversations[id, default: []].append(.init(id: replyID, role: "assistant", text: "", isStreaming: true, runID: run))
         activeReplies[id] = replyID
@@ -171,8 +202,12 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
                     let allowsBlocks = preferences.shareContext && lookups < lookupLimit && !lastRequest
                     let allowsQuestions = questions < questionLimit && !lastRequest
                     let allowsControl = mode == .autonomous && polls < pollLimit && !lastRequest && commandStates.values.contains { $0.runID == run }
-                    let catalog = BlockCatalog(sessions: indexedSessions(fallback: session), current: id)
-                    let context = preferences.shareContext ? catalog.overview : ""
+                    let runReplies = Set(messages(for: session).filter { $0.runID == run }.map(\.id))
+                    let runBlocks = Set(session.blocks.filter { $0.assistantRunID == run || $0.assistantReplyID.map { runReplies.contains($0) } == true }.map(\.id))
+                    let catalog = round == 0 ? contextPayload.catalog : BlockCatalog(sessions: indexedSessions(fallback: session), current: id,
+                                               allowedCurrentBlockIDs: contextPayload.selectedBlockIDs.union(runBlocks),
+                                               automaticCurrentBlockIDs: contextPayload.selectedBlockIDs)
+                    let context = preferences.shareContext ? (round == 0 ? contextPayload.context : catalog.overview) : ""
                     activities[id] = .thinking
                     phases[id] = count > 0 ? "读取结果，继续分析…" : "思考中…"
                     let segmentID = activeReplies[id] ?? replyID
@@ -573,6 +608,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
     }
     private func finishRun(session: TerminalSession, run: UUID, replyID: UUID, interruptRunning: Bool = true) {
         guard runs[session.id] == run else { return }
+        contextRuns[run] = nil
         invalidateQuestions(sessionID: session.id, run: run)
         for state in commandStates.values where state.runID == run {
             if let block = session.blocks.first(where: { $0.id == state.blockID }), let exitCode = block.exitCode {
@@ -646,7 +682,10 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         let token = UUID(), config = provider.fastConfiguration
         intentTokens[id] = token
         intentPreviews[id] = .init(id: block.id, command: command)
-        let recent = session.blocks.dropLast().filter { !$0.isAI }.suffix(2).map { "$ \($0.command)\nexit: \($0.exitCode ?? -1)\n\(String($0.output.suffix(1000)))" }.joined(separator: "\n")
+        let selectedIDs = Set(AgentContextBuilder.selectedBlocks(in: session).map(\.id))
+        let recent = session.blocks.dropLast().filter { !$0.isAI && !$0.isDemo && selectedIDs.contains($0.id) }.suffix(2).map {
+            "$ \(AgentContextText.bounded($0.command, limit: 1000, cacheKey: "\($0.id):intent-command").text)\nexit: \($0.exitCode ?? -1)\n\(AgentContextText.bounded($0.output, limit: 1000, cacheKey: "\($0.id):intent-output").text)"
+        }.joined(separator: "\n")
         let context = ContextRedactor.redact("Shell: \(session.shellName)\ncwd: \(session.directory)\n最近结果：\n\(recent)\n用户刚刚提交的命令（可能仍在运行）：\n\(String(command.prefix(4000)))")
         intentDeadlines[id] = Task { [weak self] in
             guard let self else { return }
@@ -721,6 +760,7 @@ typealias AITransport = @MainActor (AIRequestContext, @escaping @MainActor (AISt
         workspace?.indexedSessions ?? [session]
     }
     func context(for session: TerminalSession) -> String {
-        BlockCatalog(sessions: indexedSessions(fallback: session), current: session.id).overview
+        AgentContextBuilder.build(session: session, sessions: indexedSessions(fallback: session), conversations: messages(for: session),
+                                  question: session.draft, sharing: preferences.shareContext).context
     }
 }

@@ -55,11 +55,18 @@ import Foundation
         var titleRequests = 0, titleContexts: [String] = []
         let coordinator = TabTitleCoordinator(workspace: workspace, preferences: preferences, providers: providers, debounce: 10_000_000, timeout: 120_000_000) { request, _ in
             titleRequests += 1; titleContexts.append(request.context)
-            try? await Task.sleep(nanoseconds: request.context.contains("slow-marker") ? 250_000_000 : 25_000_000)
+            // Only the deadline/cancellation cases need a delayed response.
+            // Avoid racing the normal success check against a 120ms deadline
+            // after the preceding AppKit event-dispatch tests.
+            if request.context.contains("slow-marker") { try? await Task.sleep(nanoseconds: 250_000_000) }
             return .init(text: #"{"title":"检查项目环境"}"#)
         }
         coordinator.refresh(firstTab)
-        try await wait { workspace.tabs[0].generatedTitle != nil }
+        do { try await wait { workspace.tabs[0].generatedTitle != nil } }
+        catch {
+            print("TITLE-FIXTURE-DIAGNOSTIC requests=\(titleRequests) error=\(workspace.tabs[0].namingError ?? "none") eligible=\(first.blocks.count)/\(AgentContextBuilder.selectedBlocks(in: first).count),\(split.blocks.count)/\(AgentContextBuilder.selectedBlocks(in: split).count) sharing=\(preferences.shareContext)")
+            throw error
+        }
         check(workspace.tabs[0].title == "检查项目环境" && titleRequests == 1, "AI naming updates the actual tab label")
         coordinator.refresh(firstTab); try await Task.sleep(nanoseconds: 45_000_000)
         check(titleRequests == 1, "Repeated callbacks with unchanged context do not request another title")

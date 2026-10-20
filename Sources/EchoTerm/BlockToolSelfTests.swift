@@ -72,7 +72,8 @@ import Foundation
         check(assistant.messages(for: first).flatMap(\.steps).map(\.kind) == [.read, .jump], "Inline tool provenance distinguishes reads and jumps from executed commands")
         requests.removeAll()
         assistant.ask("继续", session: first); try await wait { !assistant.thinking.contains(first.id) }
-        check(requests.first?.messages.count == 1 && !requests.first!.context.contains("hiddenvalue"), "New AI turns send only the question and redacted block overview, not entire conversation history")
+        check((requests.first?.messages.count ?? 0) > 1 && requests.first?.messages.last?["content"] as? String == "继续"
+              && !requests.first!.context.contains("hiddenvalue"), "New AI turns replay selected bounded history before the latest question and redact context secrets")
         preferences.shareContext = false
         var optedOut = false
         let denied = AssistantStore(providers: providers, preferences: preferences) { request, _ in

@@ -58,8 +58,8 @@ enum QuickTabTitle {
     func refresh(_ id: UUID) {
         guard let workspace, let tab = workspace.tabs.first(where: { $0.id == id }) else { cancel(id); return }
         guard preferences.tabNamingPolicy == .intelligence, preferences.shareContext, tab.customTitle == nil else { cancel(id); fingerprints[id] = nil; return }
-        let entries = tab.root.sessions.flatMap(\.blocks).filter { $0.assistantContinuation != true && !$0.isDemo }.sorted { $0.startedAt < $1.startedAt }.suffix(5)
-        guard !entries.isEmpty else { return }
+        let entries = tab.root.sessions.flatMap { AgentContextBuilder.selectedBlocks(in: $0) }.filter { $0.assistantContinuation != true }.sorted { $0.startedAt < $1.startedAt }.suffix(5)
+        guard !entries.isEmpty else { cancel(id); fingerprints[id] = nil; return }
         let provider = preferences.quickProviderID.isEmpty ? providers.selected : providers.configurations.first { $0.id == preferences.quickProviderID }
         guard let config = provider?.fastConfiguration, !config.model.isEmpty else { workspace.setGeneratedTitle(nil, error: "请先配置快速模型", for: id); return }
         let context = ContextRedactor.redact(entries.map { block in
