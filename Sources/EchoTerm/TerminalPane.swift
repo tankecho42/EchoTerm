@@ -15,7 +15,7 @@ struct TerminalPane: View {
     @State private var completions: [String] = []
     @State private var completionTask: Task<Void, Never>?
     @State private var visibleBlockID: UUID?
-    @State private var followBottom = true
+    @State private var followPolicy = TranscriptFollowPolicy()
     @State private var editorFocusRevision = 0
     @State private var explicitInputFocus = false
     @State private var auxiliaryInputVisible = false
@@ -30,6 +30,10 @@ struct TerminalPane: View {
     private var completion: String? { completions.first }
     private var commandHistory: [String] { session.blocks.filter { !$0.isAI && !$0.isDemo }.map(\.command) }
     private var completionCandidates: [String] { ShellCommandCatalog.historyCompletions(for: session.draft, history: commandHistory) }
+    private var followBottom: Bool {
+        get { followPolicy.followsBottom }
+        nonmutating set { if newValue { followPolicy.resume() } else { followPolicy.pauseForUserScroll() } }
+    }
     private var showsAgentContext: Bool {
         assistant.thinking.contains(session.id) || session.inputRoute == .assistant ||
         (!session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && route == .assistant)
@@ -86,10 +90,13 @@ struct TerminalPane: View {
                                 }
                                 Color.clear.frame(height: 0).id("end")
                             }.frame(maxWidth: .infinity, alignment: .topLeading)
-                                .background(TranscriptScrollObserver { metrics, movedUp in
-                                    if movedUp && !metrics.isAtBottom { followBottom = false }
-                                    else if metrics.isAtBottom && session.readingAnchorID == nil { followBottom = true }
-                                    if followBottom && session.readingAnchorID == nil && !metrics.isAtBottom {
+                                .background(TranscriptScrollObserver(userScrolledUp: { followPolicy.pauseForUserScroll() }) { metrics, movedUp in
+                                    var policy = followPolicy
+                                    if session.readingAnchorID != nil { policy.pauseForUserScroll() }
+                                    else { policy.observe(metrics, movedUp: movedUp) }
+                                    let correctBottom = session.readingAnchorID == nil && policy.takeGeometryCorrection(metrics)
+                                    if policy != followPolicy { followPolicy = policy }
+                                    if correctBottom {
                                         reader.scrollTo("end", anchor: .bottom)
                                     }
                                 })
@@ -122,6 +129,7 @@ struct TerminalPane: View {
                             // Successful editor focus is the one-time completion / explicit-click
                             // return to the newest input, even when live output was paused.
                             followBottom = true
+                            followPolicy.requestFollow()
                             reader.scrollTo("end", anchor: .bottom)
                         }
                         .onChange(of: workspace.currentInputFocusRequest) { _, _ in
@@ -129,8 +137,8 @@ struct TerminalPane: View {
                             followBottom = true
                             scrollToCurrent(reader)
                         }
-                        .onChange(of: session.liveOutput) { _, _ in if followBottom { reader.scrollTo("end", anchor: .bottom) } }
-                        .onChange(of: assistant.messages(for: session).last?.text) { _, _ in if followBottom { reader.scrollTo("end", anchor: .bottom) } }
+                        .onChange(of: session.liveOutput) { _, _ in if followPolicy.requestFollow() { reader.scrollTo("end", anchor: .bottom) } }
+                        .onChange(of: assistant.messages(for: session).last?.text) { _, _ in if followPolicy.requestFollow() { reader.scrollTo("end", anchor: .bottom) } }
                         .overlay(alignment: .trailing) {
                             // The floating rail overlays the full-width transcript; it reserves no gutter.
                             if !session.blocks.isEmpty {
@@ -375,7 +383,9 @@ struct TerminalPane: View {
         }
     }
     private func scrollToCurrent(_ reader: ScrollViewProxy) {
+        guard followPolicy.requestFollow() else { return }
         DispatchQueue.main.async {
+            guard followBottom, session.readingAnchorID == nil else { return }
             if reduceMotion { reader.scrollTo("end", anchor: .bottom) }
             else { withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("end", anchor: .bottom) } }
         }

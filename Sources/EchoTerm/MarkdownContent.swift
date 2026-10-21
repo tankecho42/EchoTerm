@@ -41,6 +41,82 @@ enum MarkdownBlocks {
     }
 }
 
+enum MarkdownRenderPlan: Sendable {
+    case rich([MarkdownPiece]), viewport
+}
+
+/// Bound the native view tree as well as the source size. A short Markdown
+/// source can still contain thousands of list items or table cells.
+enum MarkdownRenderPolicy {
+    static let maximumSourceBytes = 100_000
+    static let maximumRichComponents = 256
+    static let maximumInlineBytes = 8_192
+    static let maximumInlineLines = 64
+
+    static func plan(for source: String) -> MarkdownRenderPlan {
+        guard !requiresViewportBeforeParsing(source) else { return .viewport }
+        let pieces = MarkdownBlocks.parse(source)
+        guard pieces.count <= maximumRichComponents else { return .viewport }
+        var components = 0
+        for piece in pieces {
+            switch piece {
+            case .paragraph(let text), .heading(_, let text), .quote(let text), .item(_, let text):
+                guard inlineFits(text) else { return .viewport }
+                components += 1
+            case .code:
+                // Code already uses its own bounded viewport when large.
+                components += 1
+            case .table(let rows):
+                for row in rows {
+                    for cell in row {
+                        guard inlineFits(cell) else { return .viewport }
+                        components += 1
+                        if components > maximumRichComponents { return .viewport }
+                    }
+                }
+            case .rule: break
+            }
+            if components > maximumRichComponents { return .viewport }
+        }
+        return .rich(pieces)
+    }
+    private static func inlineFits(_ text: String) -> Bool {
+        text.utf8.count <= maximumInlineBytes && text.lazy.filter { $0.isNewline }.prefix(maximumInlineLines).count < maximumInlineLines
+    }
+    private static func requiresViewportBeforeParsing(_ source: String) -> Bool {
+        guard source.utf8.count <= maximumSourceBytes else { return true }
+        var fence: String?, outsideLines = 0, components = 0
+        for line in source.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let current = fence {
+                if trimmed.hasPrefix(current) { fence = nil }
+                continue
+            }
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                fence = String(trimmed.prefix(3)); components += 1
+            } else if !trimmed.isEmpty {
+                outsideLines += 1
+                // Conservatively count possible table cells before constructing
+                // row arrays; exact parsed component counts are checked above.
+                components += trimmed.contains("|") ? trimmed.split(separator: "|", omittingEmptySubsequences: true).count : 1
+            }
+            if outsideLines > maximumRichComponents || components > maximumRichComponents { return true }
+        }
+        return false
+    }
+}
+
+/// Serial planning prevents detached parse jobs accumulating while streamed
+/// text changes. Obsolete queued tasks stop before parsing or publishing.
+private actor MarkdownRenderPlanner {
+    static let shared = MarkdownRenderPlanner()
+    func plan(for source: String) -> MarkdownRenderPlan? {
+        guard !Task.isCancelled else { return nil }
+        let plan = MarkdownRenderPolicy.plan(for: source)
+        return Task.isCancelled ? nil : plan
+    }
+}
+
 struct MarkdownContent: View {
     let text: String
     let theme: TerminalTheme
@@ -49,24 +125,27 @@ struct MarkdownContent: View {
     var copyOnSelection = false
     var onClick: (() -> Void)? = nil
     var isStreaming = false
-    @State private var pieces: [MarkdownPiece] = []
+    @State private var plan: MarkdownRenderPlan = .rich([])
+    private var pieces: [MarkdownPiece] { if case .rich(let pieces) = plan { return pieces }; return [] }
+    private var usesViewport: Bool {
+        if case .viewport = plan { return true }
+        return text.utf8.count > MarkdownRenderPolicy.maximumSourceBytes
+    }
     private func inline(_ text: String, size: CGFloat? = nil, weight: NSFont.Weight = .regular, color: NSColor? = nil) -> SelectableText {
         SelectableText(text: text, font: .systemFont(ofSize: size ?? fontSize, weight: weight), color: color ?? NSColor(theme.text),
                        copyOnSelection: copyOnSelection, label: "AI 回答", lineSpacing: 4, markdown: true, linkColor: NSColor(theme.accent), onClick: onClick)
     }
     var body: some View {
         Group {
-            if text.utf8.count > 100_000 {
+            if usesViewport {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("长回复 · 文本视图，完整内容可滚动、选择和复制").font(.system(size: 10)).foregroundStyle(theme.muted)
+                    Text("较长或密集的回复 · 完整内容可滚动、选择和复制").font(.system(size: 10)).foregroundStyle(theme.muted)
                     LongTextView(text: text, font: .monospacedSystemFont(ofSize: fontSize, weight: .regular), color: NSColor(theme.text), label: "长回复原文", copyOnSelection: copyOnSelection, followOutput: isStreaming, onClick: onClick).frame(height: 360)
                 }
             } else { rendered }
         }.task(id: text) {
-            guard text.utf8.count <= 100_000 else { return }
             let source = text
-            let parsed = await Task.detached(priority: .userInitiated) { MarkdownBlocks.parse(source) }.value
-            if !Task.isCancelled { pieces = parsed }
+            if let next = await MarkdownRenderPlanner.shared.plan(for: source), !Task.isCancelled { plan = next }
         }
     }
     private var rendered: some View {

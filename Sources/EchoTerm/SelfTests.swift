@@ -181,6 +181,8 @@ import AppKit
             EchoVisualSelfTests.run(check: check)
             try await UsageSelfTests.run(check: check)
             try PerformanceSelfTests.run(check: check)
+            TranscriptScrollSelfTests.runPolicy(check: check)
+            try await TranscriptScrollSelfTests.run(check: check)
             try await BlockToolSelfTests.run(check: check)
             try await AgentContextSelfTests.run(check: check)
             try UserInteractionProtocolSelfTests.run(check: check)

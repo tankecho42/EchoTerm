@@ -1,6 +1,6 @@
 # EchoTerm
 
-命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.4**。
+命令与 AI，在同一个入口。一个简洁的 macOS 原生终端，基于 SwiftUI、AppKit 与 SwiftTerm。当前版本：**0.11.5**。
 
 ![EchoTerm](promo/v10-en/output/EchoTerm-Promo-English-v10-poster.png)
 
@@ -38,6 +38,11 @@
 swift test                     # XCTest 测试（需要完整 Xcode）
 ./scripts/run.sh --demo         # 展示明确标识的示例 AI 气泡，终端仍是真实 shell
 ```
+
+## 0.11.5 的主要变化
+
+- 修复滚到密集 AI 列表、表格或超长段落时的严重卡顿：这类内容使用固定高度的完整文本视图，支持内部滚动、选择和复制，避免一次创建数千个文本组件；普通回答继续显示 Markdown 格式。
+- 向上滚动时立即暂停追随底部，滚回最新位置后恢复；内部长文本视图单独滚动。布局变化只能触发有限次数的底部位置修正，防止滚动与布局互相反复触发。
 
 ## 0.11.4 的主要变化
 

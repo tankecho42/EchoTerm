@@ -4,6 +4,7 @@ import AppKit
 
 @MainActor enum PerformanceSelfTests {
     static func run(check: (Bool, String) -> Void) throws {
+        ScrollTextLayoutSelfTests.runPolicy(check: check)
         let line = "printf '" + String(repeating: "长输入 hello ", count: 20_000) + "'"
         let start = ProcessInfo.processInfo.systemUptime
         let word = ShellWords.executable(in: line)

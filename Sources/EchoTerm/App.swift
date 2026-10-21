@@ -43,6 +43,24 @@ import SwiftUI
     var window: NSWindow!
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        if CommandLine.arguments.contains("--self-test-scroll-layout") {
+            Task { @MainActor in
+                var failures = 0, total = 0
+                let check: (Bool, String) -> Void = { passed, name in
+                    print("\(passed ? "PASS" : "FAIL") \(name)")
+                    total += 1; if !passed { failures += 1 }; fflush(stdout)
+                }
+                await ScrollTextLayoutSelfTests.run(check: check)
+                if ScrollTextLayoutSelfTests.includesCase("transcript") {
+                    TranscriptScrollSelfTests.runPolicy(check: check)
+                    do { try await TranscriptScrollSelfTests.run(check: check) }
+                    catch { check(false, "unexpected transcript scroll fixture error: \(error)") }
+                }
+                print("Scroll layout: \(total - failures)/\(total) checks passed; \(failures) failures"); fflush(stdout)
+                exit(failures == 0 ? 0 : 1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--self-test-tab-flow") {
             Task { @MainActor in
                 var failures = 0, total = 0
@@ -146,7 +164,14 @@ import SwiftUI
         window.delegate = self; window.setFrameAutosaveName("EchoTerm.main")
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        #if DEBUG
+        // Hosted UI fixtures close their own windows between asynchronous
+        // checks. Let the test runner report its result before exiting.
+        if CommandLine.arguments.contains(where: { $0 == "--self-test" || $0.hasPrefix("--self-test-") }) { return false }
+        #endif
+        return true
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let running = workspace.tabs.flatMap { $0.root.sessions }.filter(\.running)
         guard !running.isEmpty else { return .terminateNow }
